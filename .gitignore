@@ -1,0 +1,5 @@
+# The roadmap site is a build artifact, regenerated from roadmaps/ on every build.
+/site/
+
+__pycache__/
+*.pyc

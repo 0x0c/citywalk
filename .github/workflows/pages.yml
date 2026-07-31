@@ -1,0 +1,79 @@
+# Build the roadmap site and publish it to GitHub Pages.
+#
+# The site is generated from the committed markdown under `roadmaps/` by
+# `scripts/build_roadmap_site.py`, which needs only the Python standard library — no dependency
+# install step, no lock file, nothing to keep in sync. Every push builds the site, so a malformed
+# `CW-METADATA` block, an unknown Status or Topic, or a `Related` field naming an item that does not
+# exist fails here rather than publishing a broken page. Only a push to the default branch deploys.
+#
+# One-time setup before the first deploy can succeed: enable GitHub Pages under
+# Settings → Pages → Source → "GitHub Actions". Until then the deploy step fails with
+# "Ensure GitHub Pages has been enabled".
+name: Roadmap site
+
+on:
+  push:
+    paths:
+      - "roadmaps/**"
+      - "scripts/build_roadmap_site.py"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "roadmaps/**"
+      - "scripts/build_roadmap_site.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# The least privilege a Pages deployment needs: read the repository, write the Pages artifact, and
+# mint the OIDC token `deploy-pages` exchanges for the deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deployment at a time, and never cancel a running publish — cancelling would leave
+# Pages half-updated.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    steps:
+      # Full history, not the default shallow clone: each item's Updated column comes from the Git
+      # log of its directory, and a shallow clone would date every item to the single fetched commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate the site
+        run: |
+          python3 scripts/build_roadmap_site.py \
+            --repo "${{ github.repository }}" \
+            --branch "${{ github.event.repository.default_branch }}"
+
+      - name: Upload the Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    # Publishing follows the default branch alone; every other push and pull request stops after the
+    # build, which is the check that the roadmap still renders.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
