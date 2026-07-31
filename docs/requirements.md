@@ -178,7 +178,7 @@ Requirement identifiers take the form `FR-<area>-<number>` and map one to one on
 | FR-L10N-02 | When no variant matches the device locale exactly, selection falls back to a language-only match and then to the default language | Must |
 | FR-L10N-03 | Images can differ per language | Should |
 
-### 4.7 Delivery API (FR-API)
+### 4.7 Delivery application programming interface (API) (FR-API)
 
 | ID | Requirement | Priority |
 |---|---|---|

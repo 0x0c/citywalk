@@ -170,5 +170,6 @@ ceiling looks like a project whose campaigns are underperforming.
   contract this protocol transports, including its completeness and self-expiry properties.
 - [CW-0005](../CW-0005-segment-membership-index/CW-0005-segment-membership-index.md) — the
   membership index whose bitmap hash forms part of the bundle cache key.
-- [`docs/requirements.md`](../../docs/requirements.md) — the delivery API requirements this protocol
-  satisfies, including the conditional request and the synchronization hint.
+- [`docs/requirements.md`](../../docs/requirements.md) — the delivery application programming
+  interface (API) requirements this protocol satisfies, including the conditional request and the
+  synchronization hint.

@@ -17,9 +17,9 @@
 We propose the schema for a message definition, and the compatibility policy that lets it change
 without stranding devices. A definition splits into a campaign part that no channel can see and a
 content part that renders, the content is a tagged union over layout kinds rather than a free-form
-document, every content object carries a schema version, and an SDK that meets a version it does not
-know skips that message instead of guessing. Within a major version the schema only ever gains
-optional fields.
+document, every content object carries a schema version, and a software development kit (SDK) that
+meets a version it does not know skips that message instead of guessing. Within a major version the
+schema only ever gains optional fields.
 
 The compatibility policy is the part that needs stating up front, because a mobile platform gives no
 way to take a schema back. The oldest SDK version in citywalk's installed base will be two years old

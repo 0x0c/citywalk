@@ -102,8 +102,9 @@ exactly like a campaign that nobody qualified for.
 
 The device synchronizes on a schedule the server dictates: each payload carries the earliest time the
 device should next synchronize, and the device also synchronizes on a foreground return once that
-time has passed. Putting the interval in the payload rather than in the SDK lets the server widen it
-under load and narrow it during a campaign launch, without shipping an application update.
+time has passed. Putting the interval in the payload rather than in the software development kit
+(SDK) lets the server widen it under load and narrow it during a campaign launch, without shipping
+an application update.
 
 A campaign stop must not wait for that interval. Stopping sets the campaign's state in the definition
 service and invalidates the cached payloads that contain it, so the next synchronization from any
