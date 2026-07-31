@@ -124,21 +124,6 @@ never stands on an item whose code has already shipped.
 | Measurement | Event collection, aggregation, and reporting |
 | Platform | Runtime, storage, and cross-cutting infrastructure |
 
-## Items
-
-| ID | Item | Topic |
-|---|---|---|
-| [CW-0001](CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope.md) | In-app message platform: scope and decomposition | Platform |
-| [CW-0002](CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md) | Hybrid delivery: server-resolved audience, device-evaluated triggers | Delivery model |
-| [CW-0003](CW-0003-message-definition-schema/CW-0003-message-definition-schema.md) | Message definition schema and its evolution | Delivery model |
-| [CW-0004](CW-0004-audience-predicate-engine/CW-0004-audience-predicate-engine.md) | Audience predicate engine | Targeting |
-| [CW-0005](CW-0005-segment-membership-index/CW-0005-segment-membership-index.md) | Segment membership index | Targeting |
-| [CW-0006](CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md) | Delivery payload synchronization | Delivery model |
-| [CW-0007](CW-0007-display-governance/CW-0007-display-governance.md) | Display governance: caps, priority, and conflict resolution | Display governance |
-| [CW-0008](CW-0008-deterministic-experiment-assignment/CW-0008-deterministic-experiment-assignment.md) | Deterministic experiment and holdout assignment | Targeting |
-| [CW-0009](CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md) | Event ingestion and measurement pipeline | Measurement |
-| [CW-0010](CW-0010-runtime-technology-stack/CW-0010-runtime-technology-stack.md) | Runtime and technology stack | Platform |
-
 ## Related documents
 
 - [`docs/requirements.md`](../docs/requirements.md) — the requirement catalog these items design
