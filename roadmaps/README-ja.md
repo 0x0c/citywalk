@@ -119,21 +119,6 @@ roadmaps/
 | 効果測定 | イベントの収集、集計、レポート |
 | プラットフォーム | ランタイム、ストレージ、横断的な基盤 |
 
-## 項目一覧
-
-| ID | 項目 | トピック |
-|---|---|---|
-| [CW-0001](CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope-ja.md) | アプリ内メッセージ配信基盤のスコープと分解 | プラットフォーム |
-| [CW-0002](CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model-ja.md) | ハイブリッド配信：オーディエンスはサーバ、トリガーは端末で解決する | 配信モデル |
-| [CW-0003](CW-0003-message-definition-schema/CW-0003-message-definition-schema-ja.md) | メッセージ定義スキーマとその進化 | 配信モデル |
-| [CW-0004](CW-0004-audience-predicate-engine/CW-0004-audience-predicate-engine-ja.md) | オーディエンス述語式の評価エンジン | ターゲティング |
-| [CW-0005](CW-0005-segment-membership-index/CW-0005-segment-membership-index-ja.md) | セグメントのメンバーシップ索引 | ターゲティング |
-| [CW-0006](CW-0006-payload-delta-sync/CW-0006-payload-delta-sync-ja.md) | 配信ペイロードの同期 | 配信モデル |
-| [CW-0007](CW-0007-display-governance/CW-0007-display-governance-ja.md) | 表示統制：上限、優先度、競合の解決 | 表示統制 |
-| [CW-0008](CW-0008-deterministic-experiment-assignment/CW-0008-deterministic-experiment-assignment-ja.md) | 実験とホールドアウトの決定的な割当 | ターゲティング |
-| [CW-0009](CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) | イベント収集と効果測定のパイプライン | 効果測定 |
-| [CW-0010](CW-0010-runtime-technology-stack/CW-0010-runtime-technology-stack-ja.md) | ランタイムと技術スタック | プラットフォーム |
-
 ## 関連ドキュメント
 
 - [`docs/ja/requirements.md`](../docs/ja/requirements.md)：これらの項目が設計の対象とする要件の
