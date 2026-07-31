@@ -12,10 +12,10 @@ zero-padded four-digit identifier that never changes and is never reused.
 
 ## Layout
 
-One directory per item, flat under `roadmap/`:
+One directory per item, flat under `roadmaps/`:
 
 ```
-roadmap/
+roadmaps/
   CW-0001-in-app-message-platform-scope/
     CW-0001-in-app-message-platform-scope.md      ← English
     CW-0001-in-app-message-platform-scope-ja.md   ← Japanese
@@ -28,10 +28,10 @@ naturally rather than tracking the English sentence by sentence.
 ## Adding an item
 
 1. **Allocate the next identifier** — the highest existing `CW-NNNN` plus one, across every
-   directory under `roadmap/`. Never reuse, skip, or guess a number.
+   directory under `roadmaps/`. Never reuse, skip, or guess a number.
 
    ```bash
-   ls -d roadmap/CW-*/ | sort | tail -1
+   ls -d roadmaps/CW-*/ | sort | tail -1
    ```
 
 2. **Create the directory and both language files** with `Status: Proposal`. A new item is always a

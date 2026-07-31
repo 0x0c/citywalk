@@ -11,7 +11,7 @@ must be able to follow. This skill is the authoritative norm for that prose, in 
 Invoke it **before** you write or revise, not after — it shapes the draft, it is not a proofreading
 pass.
 
-- **Scope.** Every roadmap item (`roadmap/CW-*/*.md` and its `*-ja.md` mirror) and every
+- **Scope.** Every roadmap item (`roadmaps/CW-*/*.md` and its `*-ja.md` mirror) and every
   document under `docs/` (and the `docs/ja/` mirror), in both languages. It does **not** govern
   code docstrings, which keep their own standard.
 - **An umbrella above two language layers.** The *language-agnostic principles* below hold for both
@@ -200,5 +200,5 @@ dodge a finding on prose you have written; per the priority above, fix the prose
 - [`english-document-writing`](../english-document-writing/workflow.md) — the English layer beneath this norm.
 - [`japanese-document-writing`](../japanese-document-writing/workflow.md) — the Japanese layer beneath this
   norm.
-- [`roadmap/README.md`](../../roadmap/README.md) — the roadmap-item format this norm governs the
+- [`roadmaps/README.md`](../../roadmaps/README.md) — the roadmap-item format this norm governs the
   prose of.

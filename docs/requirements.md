@@ -4,7 +4,7 @@
 
 This document catalogs the requirements for the in-app message delivery feature of citywalk's server
 backend. Each requirement carries an identifier that both the design items under
-[`roadmap/`](../roadmap/README.md) and the test cases reference. The design decisions and their
+[`roadmaps/`](../roadmaps/README.md) and the test cases reference. The design decisions and their
 rationale live in the roadmap items; this document covers only what the system must satisfy.
 
 ## 1. Purpose and scope

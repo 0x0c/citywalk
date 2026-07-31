@@ -12,10 +12,10 @@
 
 ## ディレクトリ構成
 
-1項目 = 1ディレクトリとし、`roadmap/` の直下へフラットに並べます。
+1項目 = 1ディレクトリとし、`roadmaps/` の直下へフラットに並べます。
 
 ```
-roadmap/
+roadmaps/
   CW-0001-in-app-message-platform-scope/
     CW-0001-in-app-message-platform-scope.md      ← 英語
     CW-0001-in-app-message-platform-scope-ja.md   ← 日本語
@@ -27,11 +27,11 @@ roadmap/
 
 ## 項目の追加手順
 
-1. **次の識別子を採番します**。`roadmap/` 配下の全ディレクトリを見て、既存の最大 `CW-NNNN` に1を
+1. **次の識別子を採番します**。`roadmaps/` 配下の全ディレクトリを見て、既存の最大 `CW-NNNN` に1を
    足した番号を使います。再利用、飛ばし、当て推量のいずれも行いません。
 
    ```bash
-   ls -d roadmap/CW-*/ | sort | tail -1
+   ls -d roadmaps/CW-*/ | sort | tail -1
    ```
 
 2. **ディレクトリと両言語のファイルを作成します**。状態は `提案` から始めます。新しい項目は必ず
