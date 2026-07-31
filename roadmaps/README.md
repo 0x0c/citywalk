@@ -10,6 +10,18 @@ who was not in the room.
 Every entry is a **CW item**. **CW** stands for *citywalk Evolution*, and each item carries a
 zero-padded four-digit identifier that never changes and is never reused.
 
+## Browsing
+
+[**The roadmap site**](https://0x0c.github.io/citywalk/) puts every item on one page:
+
+- the status of each item, and the share of each topic already implemented;
+- the checklist progress inside an item;
+- a map of which items name each other under `Related`.
+
+A build reads this directory, and every push republishes the page. The site never lags behind the
+roadmap. `make site` builds the page locally, and `make serve` serves it at
+`http://127.0.0.1:8000`.
+
 ## Layout
 
 One directory per item, flat under `roadmaps/`:
@@ -131,3 +143,5 @@ never stands on an item whose code has already shipped.
 
 - [`docs/requirements.md`](../docs/requirements.md) — the requirement catalog these items design
   against, with an identifier per requirement.
+- [`scripts/build_roadmap_site.py`](../scripts/build_roadmap_site.py) — the generator behind the
+  roadmap site. Update the generator when the metadata format changes.
