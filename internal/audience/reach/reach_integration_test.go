@@ -41,6 +41,12 @@ func TestEstimateReachOnAKnownPopulation(t *testing.T) {
 	if err := postgres.Migrate(ctx, pool, migrations.FS); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `DELETE FROM conversion_attributions`); err != nil {
+		t.Fatalf("clear conversion_attributions: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM events_log`); err != nil {
+		t.Fatalf("clear events_log: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `DELETE FROM channels`); err != nil {
 		t.Fatalf("clear channels: %v", err)
 	}
@@ -114,6 +120,12 @@ func TestEstimateReachOnEmptyPopulation(t *testing.T) {
 	t.Cleanup(pool.Close)
 	if err := postgres.Migrate(ctx, pool, migrations.FS); err != nil {
 		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM conversion_attributions`); err != nil {
+		t.Fatalf("clear conversion_attributions: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM events_log`); err != nil {
+		t.Fatalf("clear events_log: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM channels`); err != nil {
 		t.Fatalf("clear channels: %v", err)

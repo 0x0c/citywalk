@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0009](CW-0009-event-ingestion-analytics.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Measurement |
 | Related | [CW-0004](../CW-0004-audience-predicate-engine/CW-0004-audience-predicate-engine.md), [CW-0007](../CW-0007-display-governance/CW-0007-display-governance.md), [CW-0008](../CW-0008-deterministic-experiment-assignment/CW-0008-deterministic-experiment-assignment.md) |
 <!-- /CW-METADATA -->
@@ -167,12 +167,48 @@ closed set of reasons.
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
 - [ ] Unit 1 — The event envelope, time-ordered identifiers, and the two-timestamp rule.
-- [ ] Unit 2 — Cheap acceptance with per-channel rate limiting and rejection metrics.
+      The envelope (`internal/event/model`), the closed set of kinds, the impression-family field
+      requirements, and storing both device time and server time are implemented and tested. Not
+      built: correcting device time by a measured clock offset, clamping it to the receipt time, and
+      the scheduled recomputation of the last several days' aggregates so late arrivals land in the
+      day they belong to — today a late-arriving event's rollups land wherever its own device_time
+      falls, computed once at consumption, never revisited.
+- [x] Unit 2 — Cheap acceptance with per-channel rate limiting and rejection metrics.
+      `internal/event/ingest` validates each event independently (one bad event does not sink the
+      rest of its batch), enforces a per-channel fixed-window rate limit in Redis
+      (`internal/event/ratelimit`), and records rejected volume by channel and reason as an
+      OpenTelemetry counter.
 - [ ] Unit 3 — The durable log, partitioned by channel, with per-consumer positions.
+      Per-consumer offsets, replay from a stored position, and at-least-once-safe consumption are
+      implemented and tested (`internal/event/consumer`): the offset advance and every rollup write
+      for a batch commit in one transaction, which is what makes a retry after a crash reprocess
+      rather than double-count. Not built: physical partitioning by channel. Phase one runs events_log
+      as a single Postgres table ordered by one global receipt sequence rather than independent
+      per-channel partitions a consumer could scale across — a substitution `migrations/0006_events.sql`
+      documents and a real log (Kafka, Kinesis, or similar) replaces later without changing the Go-level
+      envelope or the rollup tables downstream of it.
 - [ ] Unit 4 — Columnar storage with merge-time deduplication by event identifier.
-- [ ] Unit 5 — Targeting and campaign rollups, with sketch-based unique reach.
-- [ ] Unit 6 — Conversion attribution with an explicitly stated rule.
-- [ ] Unit 7 — The per-campaign suppression breakdown by reason.
+      Deduplication by event identifier is implemented and tested, via a primary key and
+      `ON CONFLICT DO NOTHING` at insert — cheap in practice, though it is an engine-checked write-time
+      constraint rather than the design's merge-time collapse, since there is no separate merge step
+      in phase one. Not built: a separate columnar store, day-partitioned physical storage, or
+      ordering by project/message/time for report scans — events_log plays both the log's role and
+      the store's role on the same Postgres table.
+- [x] Unit 5 — Targeting and campaign rollups, with sketch-based unique reach.
+      `targeting_rollup` and `campaign_rollup` (exact counts) and `reach_sketch` (a real HyperLogLog,
+      `internal/event/hll`, merged across days without rescanning raw events) are implemented and
+      tested end to end against real Postgres, including the sketch's accuracy and its mergeability.
+- [x] Unit 6 — Conversion attribution with an explicitly stated rule.
+      `internal/event/attribution` attributes to the most recent qualifying exposure preceding the
+      conversion within the window, counts a holdout qualification the same way as a variant
+      impression (so holdout and variant rates are comparable), and is idempotent under replay —
+      all tested against real Postgres.
+- [x] Unit 7 — The per-campaign suppression breakdown by reason.
+      `internal/event/report.Suppressions` reads the breakdown from `suppression_rollup` alongside
+      the impression count already in `campaign_rollup`. CW-0007 does not exist yet to emit real
+      suppression events, so this pass anticipates its closed set of reasons directly in
+      `internal/event/model` (documented there) — CW-0007, when built, must emit exactly those
+      values rather than defining its own.
 
 ## References
 

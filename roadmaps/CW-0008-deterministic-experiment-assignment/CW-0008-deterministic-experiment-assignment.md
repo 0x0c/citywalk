@@ -149,15 +149,24 @@ modulo on a negative hash.
 
 - [ ] Unit 1 — Identity selection and the display-time pin that survives a login.
       Identity selection (user identifier, falling back to the channel identifier) is implemented
-      and tested. The display-time pin is client SDK behavior, permanently out of scope for this
-      repository; reading the recorded variant back for analysis needs the event pipeline (CW-0009),
-      which doesn't exist yet.
+      and tested. Reading the recorded variant back for analysis now works: CW-0009's event pipeline
+      accepts an impression carrying a variant_id and aggregates it in `campaign_rollup`, which
+      `internal/event/report.Variants` reads per variant. What remains permanently unbuilt in this
+      repository is the pin itself — a client SDK behavior — and, until this platform's delivery path
+      calls CW-0008's Assign at payload assembly time and passes the result through to a device, there
+      is no live code path that actually produces a variant_id for a real impression to carry; only
+      CW-0009's storage and reporting side of this unit is exercised today.
 - [x] Unit 2 — The salted bucketing function over ten thousand buckets.
 - [x] Unit 3 — The explicit range table and a reweight that moves the fewest buckets.
 - [x] Unit 4 — Campaign holdouts as reserved ranges, and the project-wide control group.
 - [ ] Unit 5 — Holdout qualification events, and reporting from the recorded variant.
-      Not built. Both halves need the event ingestion pipeline (CW-0009) to actually record and read
-      anything; nothing here has a store to write to yet.
+      Not built, though the blocker has shifted. CW-0009's event pipeline can now record a holdout
+      qualification (`model.KindHoldoutQualified`) and read it back — its attribution package counts
+      one toward a holdout's rate the same way it counts a variant's impression. What's still missing
+      is the emission side: nothing in this repository's delivery path yet calls CW-0008's
+      `InProjectHoldout` or a range table's holdout branch and emits the resulting event: that
+      integration, and CW-0007's governance layer (which emits the suppression events Unit 5's other
+      half depends on), are both still unbuilt.
 - [x] Unit 6 — Automated uniformity and server-to-device parity tests.
       The uniformity test and the fixture parity table are both implemented — the fixture is the
       server-side artifact a device implementation would be checked against, since no device

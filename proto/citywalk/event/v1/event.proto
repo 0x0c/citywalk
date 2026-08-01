@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package citywalk.event.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/0x0c/citywalk/gen/citywalk/event/v1;eventv1";
+
+// EventService is CW-0009 Unit 2's device-facing surface: the batch submission endpoint FR-API-05
+// and FR-API-06 require, including events accumulated while the device was offline.
+service EventService {
+  // Submit accepts channel_id's batch and appends what validates to the log. It performs no
+  // aggregation and no campaign-state lookup, so its latency does not depend on anything downstream
+  // of ingestion.
+  rpc Submit(SubmitRequest) returns (SubmitResponse);
+}
+
+// Event is the wire projection of internal/event/model.Event (CW-0009 Unit 1). properties_json
+// carries the property map as a JSON document rather than a protobuf map<string, Value>: the
+// property set is open-ended application data the server never queries by key, only stores and
+// hands back, so a native message adds a codec round trip for no gain.
+message Event {
+  string id = 1;
+  string channel_id = 2;
+  // kind is one of model.Kind's closed set (e.g. "impression", "custom").
+  string kind = 3;
+  // name is the application-defined event name, required when kind is "custom".
+  string name = 4;
+  google.protobuf.Timestamp device_time = 5;
+  bytes properties_json = 6;
+  // message_id and variant_id apply only to the impression-family kinds; variant_id is empty for a
+  // suppression or a holdout qualification, neither of which ever selected a variant.
+  string message_id = 7;
+  string variant_id = 8;
+  // suppression_reason applies only when kind is "suppression", from CW-0007's closed set.
+  string suppression_reason = 9;
+}
+
+message SubmitRequest {
+  // channel_id is declared for the wire shape; see DeliveryService's ConfirmRequest for why no
+  // handler should trust it over token-derived identity once CW-0010 Unit 9 exists. Every event in
+  // events must carry this same channel_id.
+  string channel_id = 1;
+  repeated Event events = 2;
+}
+
+message SubmitResponse {
+  int32 accepted = 1;
+  int32 rejected_invalid = 2;
+  int32 rejected_rate_limited = 3;
+}

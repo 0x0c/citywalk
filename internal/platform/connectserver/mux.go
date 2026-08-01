@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/0x0c/citywalk/gen/citywalk/delivery/v1/deliveryv1connect"
+	"github.com/0x0c/citywalk/gen/citywalk/event/v1/eventv1connect"
 	"github.com/0x0c/citywalk/gen/citywalk/platform/v1/platformv1connect"
 )
 
@@ -20,7 +21,9 @@ import (
 // and redisClient may be nil (both are optional in phase one, per CW-0010 Unit 11). DeliveryService
 // is registered whenever pool is set, since Confirm needs only Postgres; Sync additionally needs
 // redisClient and reports so per call (see DeliveryServer.Sync) rather than the whole service being
-// unavailable for want of the one dependency Confirm doesn't need.
+// unavailable for want of the one dependency Confirm doesn't need. EventService follows the same
+// pattern: registered whenever pool is set, with Submit itself reporting Unavailable if redisClient
+// is nil, since only the rate limit (not the log append) needs Redis.
 func NewMux(pool *pgxpool.Pool, redisClient *redis.Client) (http.Handler, error) {
 	otelInterceptor, err := otelconnect.NewInterceptor()
 	if err != nil {
@@ -37,6 +40,11 @@ func NewMux(pool *pgxpool.Pool, redisClient *redis.Client) (http.Handler, error)
 			DeliveryServer{Pool: pool, Redis: redisClient}, interceptors,
 		)
 		mux.Handle(deliveryPath, deliveryHandler)
+
+		eventPath, eventHandler := eventv1connect.NewEventServiceHandler(
+			EventServer{Pool: pool, Redis: redisClient}, interceptors,
+		)
+		mux.Handle(eventPath, eventHandler)
 	}
 
 	return mux, nil
