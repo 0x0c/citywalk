@@ -78,7 +78,9 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # v7 is required for a v2 golangci-lint (our .golangci.yml is the v2 config format); v6
+        # only knows how to install golangci-lint v1.
+        uses: golangci/golangci-lint-action@v7
         with:
           # Pinned rather than "latest": golangci-lint's own toolchain must be built with a Go at
           # least as new as go.mod's `go` directive, and letting the action pick can hand us a
