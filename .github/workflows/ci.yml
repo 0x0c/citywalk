@@ -80,7 +80,10 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pinned rather than "latest": golangci-lint's own toolchain must be built with a Go at
+          # least as new as go.mod's `go` directive, and letting the action pick can hand us a
+          # cached older binary that rejects a newer directive outright.
+          version: v2.5.0
 
       - name: Regenerate protobuf code and diff against the committed gen/
         run: |
