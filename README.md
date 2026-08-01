@@ -29,8 +29,9 @@ roadmaps/
   CW-0001-in-app-message-platform-scope/
     CW-0001-in-app-message-platform-scope.md      English
     CW-0001-in-app-message-platform-scope-ja.md   Japanese
-.agent-workflows/      the prose norm every document here follows, and its textlint runtime
-.claude/skills/        the same norm, exposed to Claude Code as skills
+.agent-workflows/      the prose norm every document here follows, its textlint runtime, and the
+                        implement workflow that turns a roadmap item into code
+.claude/skills/        the same workflows, exposed to Claude Code as skills
 ```
 
 ## Where to start
@@ -84,6 +85,15 @@ npx --prefix "$SKILL_DIR/textlint" textlint \
   --config "$SKILL_DIR/textlint/.textlintrc.json" \
   docs/requirements.md
 ```
+
+## Implementing an item
+
+Turning a roadmap item's `Detailed design` into code follows its own guardrailed workflow:
+[`implement`](.agent-workflows/implement/workflow.md). It resolves the item, plans the change and
+waits for approval before writing code, implements against the stack
+[CW-0010](roadmaps/CW-0010-runtime-technology-stack/CW-0010-runtime-technology-stack.md) settled,
+and keeps reviewing and fixing — a mechanical gate, then a semantic self-review — until nothing is
+left open, before it updates the item's `Status` and ships.
 
 ## Status
 
