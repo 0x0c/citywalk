@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0005](CW-0005-segment-membership-index.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Targeting |
 | Related | [CW-0004](../CW-0004-audience-predicate-engine/CW-0004-audience-predicate-engine.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md) |
 <!-- /CW-METADATA -->
@@ -156,12 +156,15 @@ other signal — a stale membership serves a payload that looks entirely normal.
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — Dense channel ordinals, allocated on registration and retired on deletion.
-- [ ] Unit 2 — Forward index as a Roaring bitmap per segment, with cardinality and set algebra.
-- [ ] Unit 3 — Reverse index as a per-channel segment bitmap in the in-memory store.
-- [ ] Unit 4 — Batch recomputation with generation numbering and an atomic pointer swap.
-- [ ] Unit 5 — Incremental maintenance driven by an attribute-to-segment dependency map.
+- [x] Unit 1 — Dense channel ordinals, allocated on registration and retired on deletion.
+- [x] Unit 2 — Forward index as a Roaring bitmap per segment, with cardinality and set algebra.
+- [x] Unit 3 — Reverse index as a per-channel segment bitmap in the in-memory store.
+- [x] Unit 4 — Batch recomputation with generation numbering and an atomic pointer swap.
+- [x] Unit 5 — Incremental maintenance driven by an attribute-to-segment dependency map.
 - [ ] Unit 6 — Scheduled reconciliation reporting the disagreement count as a health metric.
+      The comparison and disagreement-count reporting run as part of every recomputation and are
+      tested; nothing runs it on a schedule yet, since the job queue that would trigger it
+      (CW-0010 Unit 8) doesn't exist.
 
 ## References
 

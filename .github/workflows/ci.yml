@@ -102,4 +102,8 @@ jobs:
         env:
           CITYWALK_TEST_POSTGRES_DSN: postgres://citywalk:citywalk@localhost:5432/citywalk_test?sslmode=disable
           CITYWALK_TEST_REDIS_ADDR: localhost:6379
-        run: go test -tags=integration ./...
+        # -p 1: every integration suite shares the one Postgres and Redis instance above, and more
+        # than one package truncates shared tables (e.g. channels) as test setup. Go runs different
+        # packages' tests in parallel by default, which races those truncations against each other;
+        # -p 1 serializes package execution so each suite's setup and assertions hold.
+        run: go test -tags=integration -p 1 ./...
