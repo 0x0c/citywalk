@@ -29,8 +29,9 @@ roadmaps/
   CW-0001-in-app-message-platform-scope/
     CW-0001-in-app-message-platform-scope.md      英語
     CW-0001-in-app-message-platform-scope-ja.md   日本語
-.agent-workflows/      本リポジトリのドキュメントが従う文章規範と、その textlint 実行環境
-.claude/skills/        同じ文章規範を Claude Code のスキルとして公開したもの
+.agent-workflows/      本リポジトリのドキュメントが従う文章規範、その textlint 実行環境、
+                        ロードマップ項目をコードに変換する implement ワークフロー
+.claude/skills/        これらのワークフローを Claude Code のスキルとして公開したもの
 ```
 
 ## 読む順序
@@ -86,6 +87,15 @@ npx --prefix "$SKILL_DIR/textlint" textlint \
   --config "$SKILL_DIR/textlint/.textlintrc.json" \
   docs/ja/requirements.md
 ```
+
+## ロードマップ項目の実装
+
+ロードマップ項目の `Detailed design` をコードに変換する作業には、専用のガードレール付きワークフロー
+[`implement`](.agent-workflows/implement/workflow.md) があります。項目を特定し、変更内容を計画して
+承認を待ってからコードを書き始め、
+[CW-0010](roadmaps/CW-0010-runtime-technology-stack/CW-0010-runtime-technology-stack-ja.md) が定めた
+技術スタックに沿って実装し、機械的なゲートと意味面でのセルフレビューを、指摘がなくなるまで繰り返して
+から、項目の `Status` を更新して出荷します。
 
 ## 現在の状態
 
