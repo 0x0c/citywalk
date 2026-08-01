@@ -148,25 +148,36 @@ modulo on a negative hash.
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
 - [ ] Unit 1 — Identity selection and the display-time pin that survives a login.
-      Identity selection (user identifier, falling back to the channel identifier) is implemented
-      and tested. Reading the recorded variant back for analysis now works: CW-0009's event pipeline
-      accepts an impression carrying a variant_id and aggregates it in `campaign_rollup`, which
-      `internal/event/report.Variants` reads per variant. What remains permanently unbuilt in this
-      repository is the pin itself — a client SDK behavior — and, until this platform's delivery path
-      calls CW-0008's Assign at payload assembly time and passes the result through to a device, there
-      is no live code path that actually produces a variant_id for a real impression to carry; only
-      CW-0009's storage and reporting side of this unit is exercised today.
+      Identity selection is implemented, tested, and now live on the delivery path:
+      `internal/delivery/payload.buildEntry` calls `assign.Assign` at payload assembly time (per
+      language group, with a bucket allocation derived from CW-0003's validated variant weights) and
+      the resulting variant_id is what a real impression now carries, aggregated by CW-0009 into
+      `campaign_rollup` and read back by `internal/event/report.Variants`. Because this schema has no
+      user-account linkage yet, the identity used today is always the channel identifier — never a
+      user identifier — which the design's "preferring the user identifier" property needs that
+      linkage to actually deliver; this is a documented simplification, not a deviation once user
+      accounts exist. The one piece permanently unbuilt in this repository is the pin itself, a client
+      SDK behavior.
 - [x] Unit 2 — The salted bucketing function over ten thousand buckets.
 - [x] Unit 3 — The explicit range table and a reweight that moves the fewest buckets.
 - [x] Unit 4 — Campaign holdouts as reserved ranges, and the project-wide control group.
+      The reserved-range mechanism is also wired into the live delivery path now: a message's
+      `HoldoutFraction` reserves a real range in the range table `payload.buildEntry` builds, and a
+      channel landing there is excluded from its payload exactly like a channel that never qualified.
+      `InProjectHoldout` (the separate, project-wide control group) has no caller yet — there is no
+      project entity in this schema for it to scope against.
 - [ ] Unit 5 — Holdout qualification events, and reporting from the recorded variant.
-      Not built, though the blocker has shifted. CW-0009's event pipeline can now record a holdout
-      qualification (`model.KindHoldoutQualified`) and read it back — its attribution package counts
-      one toward a holdout's rate the same way it counts a variant's impression. What's still missing
-      is the emission side: nothing in this repository's delivery path yet calls CW-0008's
-      `InProjectHoldout` or a range table's holdout branch and emits the resulting event: that
-      integration, and CW-0007's governance layer (which emits the suppression events Unit 5's other
-      half depends on), are both still unbuilt.
+      Reporting from the recorded variant is done (see Unit 1's note). Still not built: holdout
+      qualification events. CW-0009's event pipeline can record one
+      (`model.KindHoldoutQualified`) and its attribution package counts it toward the holdout's rate
+      the same way it counts an impression, but nothing emits one — a channel landing in a message's
+      holdout is simply excluded from its payload today, with no corresponding event. Emitting one
+      would need the delivery path itself to write to the event log during payload assembly (a
+      read path, awkward for a side effect meant to represent "the device would have shown this and
+      didn't"), and `InProjectHoldout`'s project-wide holdout stays entirely unwired, same as noted in
+      Unit 4. CW-0007's governance layer already emits the one suppression reason a server-side
+      decision can produce (`project_budget`); the other seven reasons this unit's other half would
+      read are device-side decisions and permanently out of scope for this repository.
 - [x] Unit 6 — Automated uniformity and server-to-device parity tests.
       The uniformity test and the fixture parity table are both implemented — the fixture is the
       server-side artifact a device implementation would be checked against, since no device

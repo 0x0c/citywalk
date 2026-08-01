@@ -219,6 +219,120 @@ func TestBuildTruncatesInPriorityOrder(t *testing.T) {
 	}
 }
 
+// TestBuildAssignsAVariantDeterministicallyAcrossMultipleVariants is CW-0008 Units 2 and 3 wired into
+// the live delivery path: a message with two variants for the same language selects one of them by
+// assignment rather than always the first, and repeated builds for the same channel return the same
+// variant every time — CW-0008's whole premise, computed fresh rather than stored.
+func TestBuildAssignsAVariantDeterministicallyAcrossMultipleVariants(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	channelID := insertChannel(t, ctx, pool, map[string]any{"country": "JP"})
+
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	seg, err := segment.Save(ctx, pool, env, reg, "Japan", `country == "JP"`)
+	if err != nil {
+		t.Fatalf("segment.Save: %v", err)
+	}
+
+	msg := &model.Message{
+		Name: "A/B test", State: model.MessageStateActive,
+		Window:      model.Window{Start: now.Add(-time.Hour), End: now.Add(time.Hour)},
+		AudienceRef: seg.ID,
+		Variants: []model.Variant{
+			{Weight: 50, Language: "en", SchemaVersion: model.SchemaVersion{Major: model.CurrentMajor}, Content: model.DialogContent{Presentation: model.Presentation{Heading: "A"}}},
+			{Weight: 50, Language: "en", SchemaVersion: model.SchemaVersion{Major: model.CurrentMajor}, Content: model.DialogContent{Presentation: model.Presentation{Heading: "B"}}},
+		},
+	}
+	if err := store.InsertMessage(ctx, pool, msg); err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	if _, err := batch.Recompute(ctx, pool, redisClient, reg); err != nil {
+		t.Fatalf("batch.Recompute: %v", err)
+	}
+
+	first, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	if err != nil {
+		t.Fatalf("Build (first): %v", err)
+	}
+	if len(first.Entries) != 1 {
+		t.Fatalf("len(Entries) = %d, want 1", len(first.Entries))
+	}
+	assignedVariant := first.Entries[0].VariantID
+
+	found := false
+	for _, v := range msg.Variants {
+		if v.ID == assignedVariant {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("assigned variant %s is not one of the message's own variants", assignedVariant)
+	}
+
+	for i := 0; i < 5; i++ {
+		again, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+		if err != nil {
+			t.Fatalf("Build (repeat %d): %v", i, err)
+		}
+		if len(again.Entries) != 1 || again.Entries[0].VariantID != assignedVariant {
+			t.Fatalf("Build (repeat %d) assigned %v, want the same variant %s every time", i, again.Entries, assignedVariant)
+		}
+	}
+}
+
+// TestBuildExcludesAMessageWhenTheChannelLandsInItsHoldout is CW-0008 Unit 4 wired into the live
+// delivery path: a message whose entire bucket space is reserved for its holdout never appears in
+// any channel's payload — eligible in every respect, but excluded exactly like a channel that never
+// qualified.
+func TestBuildExcludesAMessageWhenTheChannelLandsInItsHoldout(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	channelID := insertChannel(t, ctx, pool, map[string]any{"country": "JP"})
+
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	seg, err := segment.Save(ctx, pool, env, reg, "Japan", `country == "JP"`)
+	if err != nil {
+		t.Fatalf("segment.Save: %v", err)
+	}
+
+	msg := &model.Message{
+		Name: "Fully held out", State: model.MessageStateActive,
+		Window:          model.Window{Start: now.Add(-time.Hour), End: now.Add(time.Hour)},
+		AudienceRef:     seg.ID,
+		HoldoutFraction: 1.0,
+		Variants: []model.Variant{{
+			Weight: 100, Language: "en", SchemaVersion: model.SchemaVersion{Major: model.CurrentMajor},
+			Content: model.DialogContent{},
+		}},
+	}
+	if err := store.InsertMessage(ctx, pool, msg); err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	if _, err := batch.Recompute(ctx, pool, redisClient, reg); err != nil {
+		t.Fatalf("batch.Recompute: %v", err)
+	}
+
+	p, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(p.Entries) != 0 {
+		t.Errorf("len(Entries) = %d, want 0 (message is 100%% held out)", len(p.Entries))
+	}
+}
+
 func insertChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attrs map[string]any) string {
 	t.Helper()
 	var id string

@@ -55,10 +55,14 @@ type Message struct {
 	// Version increments on every save. CW-0001 Unit 1's full publish-a-new-version-rather-than-
 	// mutate workflow isn't built yet — this is the minimal counter CW-0002 Unit 2's payload
 	// contract needs a device to detect a change by, ahead of that fuller mechanism.
-	Version           int
-	AudienceRef       string
-	ControlPolicy     ControlPolicy
-	HoldoutFraction   float64
+	Version         int
+	AudienceRef     string
+	ControlPolicy   ControlPolicy
+	HoldoutFraction float64
+	// ExperimentSalt is CW-0008 Unit 2's per-experiment salt: generated once, server-side, when the
+	// message is first inserted (a column default, not application code — see
+	// migrations/0007_experiment_salt.sql), and never reused or recomputed thereafter.
+	ExperimentSalt    string
 	ConversionEvent   string
 	Triggers          []Trigger
 	DisplayConditions []DisplayCondition

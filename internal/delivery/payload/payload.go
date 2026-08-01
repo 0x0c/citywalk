@@ -8,6 +8,8 @@ package payload
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,6 +21,7 @@ import (
 	"github.com/0x0c/citywalk/internal/definition/model"
 	"github.com/0x0c/citywalk/internal/definition/store"
 	deliverysync "github.com/0x0c/citywalk/internal/delivery/sync"
+	"github.com/0x0c/citywalk/internal/experiment/assign"
 	"github.com/0x0c/citywalk/internal/membership/reverse"
 )
 
@@ -112,9 +115,14 @@ func Build(
 		if err != nil {
 			return Payload{}, fmt.Errorf("payload: load message %s: %w", id, err)
 		}
-		entry, err := buildEntry(msg, language)
+		entry, included, err := buildEntry(msg, language, channelID)
 		if err != nil {
 			return Payload{}, fmt.Errorf("payload: build entry for message %s: %w", id, err)
+		}
+		if !included {
+			// channelID landed in msg's own holdout (CW-0008 Unit 4): eligible in every respect, but
+			// receives no content, exactly like a channel that never qualified at all.
+			continue
 		}
 		entries = append(entries, entry)
 	}
@@ -132,24 +140,33 @@ func Build(
 	return Payload{Entries: entries, NextSyncAt: nextSync}, nil
 }
 
-// buildEntry projects msg onto the device-safe Entry shape, selecting msg's variant matching
-// language — falling back to the first variant if none matches, since CW-0008's experiment
-// assignment (the second half of CW-0003 Unit 1's "by language first and then by experiment
-// assignment" selection rule) isn't built yet.
-func buildEntry(msg model.Message, language string) (Entry, error) {
+// buildEntry projects msg onto the device-safe Entry shape, selecting msg's variant by language
+// first and then by CW-0008's deterministic experiment assignment among that language's variants —
+// CW-0003 Unit 1's full two-step selection rule. included is false when identity landed in msg's own
+// holdout (CW-0008 Unit 4): eligible in every respect, but the caller must not include an entry for
+// it. When no variant matches language at all, buildEntry falls back to msg's first variant with no
+// assignment and no holdout — the safety net this path has always had for a campaign with no content
+// in the device's language.
+func buildEntry(msg model.Message, language, identity string) (Entry, bool, error) {
 	if len(msg.Variants) == 0 {
-		return Entry{}, fmt.Errorf("message has no variants")
+		return Entry{}, false, fmt.Errorf("message has no variants")
 	}
+
 	variant := msg.Variants[0]
-	for _, v := range msg.Variants {
-		if v.Language == language {
-			variant = v
-			break
+	if languageVariants := variantsForLanguage(msg.Variants, language); len(languageVariants) > 0 {
+		selected, isHoldout, err := assignVariant(msg, languageVariants, identity)
+		if err != nil {
+			return Entry{}, false, err
 		}
+		if isHoldout {
+			return Entry{}, false, nil
+		}
+		variant = selected
 	}
+
 	content, err := variant.MarshalContentColumn()
 	if err != nil {
-		return Entry{}, fmt.Errorf("encode variant content: %w", err)
+		return Entry{}, false, fmt.Errorf("encode variant content: %w", err)
 	}
 
 	return Entry{
@@ -163,7 +180,94 @@ func buildEntry(msg model.Message, language string) (Entry, error) {
 		DisplayConditions: msg.DisplayConditions,
 		ControlPolicy:     msg.ControlPolicy,
 		ExpiresAt:         msg.Window.End,
-	}, nil
+	}, true, nil
+}
+
+// variantsForLanguage returns every variant in variants matching language, in no particular order.
+func variantsForLanguage(variants []model.Variant, language string) []model.Variant {
+	var out []model.Variant
+	for _, v := range variants {
+		if v.Language == language {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// assignVariant runs CW-0008 Units 2 through 4 over languageVariants: a range table sized to
+// msg.HoldoutFraction's reserved holdout and each variant's percentage weight (already validated to
+// sum to 100 within a language group, CW-0003 Unit 5), looked up under msg.ExperimentSalt and
+// identity. identity is CW-0008 Unit 1's stable identity; this schema has no user-account linkage
+// yet, so it is always the channel identifier, never a user identifier, until that linkage exists.
+func assignVariant(msg model.Message, languageVariants []model.Variant, identity string) (model.Variant, bool, error) {
+	ids := make([]string, len(languageVariants))
+	byID := make(map[string]model.Variant, len(languageVariants))
+	weightPercent := make(map[string]int, len(languageVariants))
+	for i, v := range languageVariants {
+		ids[i] = v.ID
+		byID[v.ID] = v
+		weightPercent[v.ID] = v.Weight
+	}
+	// Sorted independently of the order GetMessage's query happened to return: CW-0008's whole
+	// premise is that the same inputs produce the same table anywhere, and "the order the database
+	// returned rows in" is not a stable input.
+	sort.Strings(ids)
+
+	holdoutBuckets := int(math.Round(msg.HoldoutFraction * float64(assign.BucketCount)))
+	nonHoldoutBuckets := assign.BucketCount - holdoutBuckets
+	bucketWeights := allocateExperimentBuckets(ids, weightPercent, nonHoldoutBuckets)
+
+	table, err := assign.NewRangeTable(ids, bucketWeights, holdoutBuckets)
+	if err != nil {
+		return model.Variant{}, false, fmt.Errorf("build range table for message %s: %w", msg.ID, err)
+	}
+	result, err := assign.Assign(table, msg.ExperimentSalt, identity)
+	if err != nil {
+		return model.Variant{}, false, fmt.Errorf("assign variant for message %s: %w", msg.ID, err)
+	}
+	if result.IsHoldout {
+		return model.Variant{}, true, nil
+	}
+	return byID[result.Variant], false, nil
+}
+
+// allocateExperimentBuckets converts each variant's percentage weight into a bucket count summing to
+// exactly totalBuckets, using the largest-remainder method: floor each variant's proportional share,
+// then hand the leftover buckets to the variants with the largest fractional remainder, breaking ties
+// by variant ID. Determinism here is not a nicety but CW-0008's entire premise — the same inputs must
+// produce the same table on any server — which is why ties break on the variant ID rather than
+// anything about evaluation order.
+func allocateExperimentBuckets(ids []string, weightPercent map[string]int, totalBuckets int) map[string]int {
+	type share struct {
+		id        string
+		floor     int
+		remainder float64
+	}
+	shares := make([]share, len(ids))
+	flooredSum := 0
+	for i, id := range ids {
+		exact := float64(weightPercent[id]) * float64(totalBuckets) / 100
+		floor := int(exact)
+		shares[i] = share{id: id, floor: floor, remainder: exact - float64(floor)}
+		flooredSum += floor
+	}
+	leftover := totalBuckets - flooredSum
+
+	sort.SliceStable(shares, func(i, j int) bool {
+		if shares[i].remainder != shares[j].remainder {
+			return shares[i].remainder > shares[j].remainder
+		}
+		return shares[i].id < shares[j].id
+	})
+
+	buckets := make(map[string]int, len(ids))
+	for i, s := range shares {
+		buckets[s.id] = s.floor
+		if i < leftover {
+			buckets[s.id]++
+		}
+	}
+	return buckets
 }
 
 // truncate keeps entries (already priority-ordered by the eligibleMessageIDs query) while their

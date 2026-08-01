@@ -35,9 +35,9 @@ func InsertMessage(ctx context.Context, pool *pgxpool.Pool, msg *model.Message) 
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO messages (name, state, priority, window_start, window_end, audience_ref, holdout_fraction, conversion_event, version)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id
+		RETURNING id, experiment_salt
 	`, msg.Name, string(msg.State), msg.Priority, msg.Window.Start, msg.Window.End, nullIfEmpty(msg.AudienceRef), msg.HoldoutFraction, nullIfEmpty(msg.ConversionEvent), msg.Version,
-	).Scan(&msg.ID); err != nil {
+	).Scan(&msg.ID, &msg.ExperimentSalt); err != nil {
 		return fmt.Errorf("store: insert message: %w", err)
 	}
 
@@ -99,11 +99,11 @@ func GetMessage(ctx context.Context, pool *pgxpool.Pool, id string) (model.Messa
 	var state string
 	var audienceRef, conversionEvent *string
 	if err := pool.QueryRow(ctx, `
-		SELECT id, name, state, priority, window_start, window_end, audience_ref, holdout_fraction, conversion_event, version
+		SELECT id, name, state, priority, window_start, window_end, audience_ref, holdout_fraction, conversion_event, version, experiment_salt
 		FROM messages WHERE id = $1
 	`, id).Scan(
 		&msg.ID, &msg.Name, &state, &msg.Priority, &msg.Window.Start, &msg.Window.End,
-		&audienceRef, &msg.HoldoutFraction, &conversionEvent, &msg.Version,
+		&audienceRef, &msg.HoldoutFraction, &conversionEvent, &msg.Version, &msg.ExperimentSalt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.Message{}, fmt.Errorf("store: get message %s: %w", id, ErrNotFound)

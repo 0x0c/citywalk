@@ -170,10 +170,13 @@ split, which is why it is a separate item rather than a paragraph here.
       Implemented yet (each still carries its own open sub-items) — this box mirrors theirs rather
       than reaching a more finished-sounding state on its own account.
 - [ ] Unit 3 — Delivery service: payload assembly, variant selection, synchronization.
-      CW-0002's payload assembly and CW-0006's delta synchronization protocol work end to end against
-      real Postgres and Redis. Variant selection is by language only; CW-0008's experiment and holdout
-      assignment is implemented as a standalone, tested package but is not yet called from this path,
-      so "applies the experiment and holdout assignment" is not yet true of the live delivery code.
+      CW-0002's payload assembly, CW-0006's delta synchronization protocol, and CW-0008's experiment
+      and holdout assignment all work end to end against real Postgres and Redis: variant selection
+      is by language first, then by deterministic assignment among that language's variants, and a
+      message whose holdout claims a channel is excluded from its payload. Left unchecked because
+      CW-0008 itself still has open units (the display-time pin and holdout-qualification telemetry
+      are permanently or currently out of reach — see its own progress notes), so this box mirrors
+      that rather than reaching a more finished-sounding state on its own account.
 - [ ] Unit 4 — Ingestion service: event acceptance, deduplication, and publication.
       CW-0009's acceptance, per-channel rate limiting, identifier-based deduplication, and rollup
       consumption are implemented and tested. "Publishes them onto a stream" is phase-one Postgres
