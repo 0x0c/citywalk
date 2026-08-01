@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0003](CW-0003-message-definition-schema.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Delivery model |
 | Related | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md) |
 <!-- /CW-METADATA -->
@@ -147,11 +147,18 @@ the person who can fix it, while a rejection at delivery reaches a device and no
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — The five entities and the message-to-variant split.
-- [ ] Unit 2 — Content as a tagged union over layouts, with actions as a nested union.
-- [ ] Unit 3 — Relational columns for queried fields, one JSON document per variant for content.
+- [x] Unit 1 — The five entities and the message-to-variant split.
+- [x] Unit 2 — Content as a tagged union over layouts, with actions as a nested union.
+- [x] Unit 3 — Relational columns for queried fields, one JSON document per variant for content.
 - [ ] Unit 4 — Schema versioning, additive-only minor changes, parallel emission across a major.
+      Versioning and the compatibility check are implemented; parallel emission itself needs a
+      device to declare its supported major at registration, which needs channel registration
+      (CW-0010 Unit 9) and the delivery service (CW-0002/CW-0006), neither built yet.
 - [ ] Unit 5 — Save-time validation covering shape, references, time, weights, and content security.
+      Shape, temporal sanity, weights, and content security are implemented; referential integrity
+      (segment, conversion event, and media existence) is not — those catalogs don't exist as
+      queryable stores yet (CW-0004/CW-0005 for segments, no owner yet for conversion events, and
+      CW-0010 Unit 7 defers object storage to a later phase).
 
 ## References
 
