@@ -160,9 +160,12 @@ split, which is why it is a separate item rather than a paragraph here.
 
 - [ ] Unit 1 — Definition service: schema, administrative API, validation, audit log, kill switch.
       CW-0003's schema, save-time validation, and a minimal insert/get store exist and are tested.
-      Missing: the administrative API's full create/update/delete/publish surface, the audit log, and
-      the kill switch — none of which CW-0003 itself scopes as its own unit, so they remain this
-      unit's own open work.
+      The kill switch and its audit log are also implemented and tested now: `store.UpdateState`
+      moves a message between states only along FR-MSG-01's forward-only transitions
+      (`MessageState.CanTransition`, itself newly tested), and records every successful move in
+      `message_audit_log`, which `store.ListAuditLog` reads back. Still missing: a network-facing
+      administrative API (authentication, and the rest of the create/update/delete/publish surface —
+      today's store package is a persistence layer a future API would call, not the API itself).
 - [ ] Unit 2 — Audience service: predicate evaluation and segment membership.
       CW-0004's predicate language and evaluator and CW-0005's membership index are both implemented
       and tested; a channel's eligible set resolves end to end through the reverse index CW-0002's

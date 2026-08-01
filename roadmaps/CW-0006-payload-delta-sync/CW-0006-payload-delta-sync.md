@@ -165,10 +165,13 @@ ceiling looks like a project whose campaigns are underperforming.
       edits, which is a materially harder problem than the full-payload path this pass ships. Deferred
       rather than half-built.
 - [ ] Unit 4 — Two-tier assembly cache: shared bundle plus per-channel overlay.
-      Not built. The split only pays for itself once there is a genuine per-channel overlay to layer
-      on top of a shared bundle — today's assembly has no per-channel part at all, since CW-0008's
-      experiment and holdout assignment isn't built yet. Building the cache split now, with nothing
-      to split, would be exactly the abstraction the implementation guardrails rule out.
+      Not built. The premise that motivated deferring this has changed since it was first written:
+      CW-0008's experiment and holdout assignment is now wired into payload assembly, so there is a
+      genuine per-channel part (which variant, or whether a channel is held out) to layer as an
+      overlay on a shared bundle. Still not building the cache split itself in this pass — it is a
+      performance optimization over a path with no measured cost problem yet, and adding it ahead of
+      that evidence is exactly the abstraction the implementation guardrails rule out — but the reason
+      to defer it is now "no measured need," not "nothing to split."
 - [x] Unit 5 — Server-dictated interval with jitter, and exponential backoff with full jitter.
       The interval and jitter are CW-0002 Unit 3's `internal/delivery/sync` package, reused here
       unchanged and returned on every Sync response, including the unchanged path. Backoff is device

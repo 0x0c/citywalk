@@ -1,7 +1,8 @@
 // Package store persists model.Message against the schema migrations/0002_definition_schema.sql
-// creates (CW-0003 Unit 3). It implements only what proves that schema round-trips a full
-// definition; the administrative create/update/delete/publish surface belongs to the definition
-// service CW-0001 Unit 1 builds on top of this.
+// creates (CW-0003 Unit 3), and implements CW-0001 Unit 1's kill switch (UpdateState) and its
+// underlying audit log. A network-facing administrative API — authentication, the full
+// create/update/delete/publish surface a campaign author drives — is not built here; this package
+// is the persistence layer that surface would call.
 package store
 
 import (
@@ -191,6 +192,87 @@ func GetMessage(ctx context.Context, pool *pgxpool.Pool, id string) (model.Messa
 	}
 
 	return msg, nil
+}
+
+// AuditEntry is one row of a message's state-transition history (CW-0001 Unit 1's audit log).
+type AuditEntry struct {
+	FromState  model.MessageState
+	ToState    model.MessageState
+	OccurredAt time.Time
+}
+
+// UpdateState is CW-0001 Unit 1's kill switch: the one administrative mutation this pass gives a
+// real function to. It moves messageID from its current state to newState only if
+// MessageState.CanTransition allows it (FR-MSG-01: "a transition only moves forward" — rejected
+// rather than silently clamped or ignored), and records the move in message_audit_log in the same
+// transaction, so a state and its audit trail can never disagree about what happened.
+func UpdateState(ctx context.Context, pool *pgxpool.Pool, messageID string, newState model.MessageState, now time.Time) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: update state: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// FOR UPDATE: two concurrent kill-switch calls on the same message must serialize, not both read
+	// the same starting state and both believe their transition was the one that applied.
+	var currentState string
+	if err := tx.QueryRow(ctx, `SELECT state FROM messages WHERE id = $1 FOR UPDATE`, messageID).Scan(&currentState); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("store: update state: message %s: %w", messageID, ErrNotFound)
+		}
+		return fmt.Errorf("store: update state: look up message %s: %w", messageID, err)
+	}
+
+	from := model.MessageState(currentState)
+	if !from.CanTransition(newState) {
+		return fmt.Errorf("store: update state: message %s cannot move from %q to %q", messageID, from, newState)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE messages SET state = $1, updated_at = $2 WHERE id = $3`, string(newState), now, messageID,
+	); err != nil {
+		return fmt.Errorf("store: update state: update message %s: %w", messageID, err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO message_audit_log (message_id, from_state, to_state, occurred_at) VALUES ($1, $2, $3, $4)`,
+		messageID, string(from), string(newState), now,
+	); err != nil {
+		return fmt.Errorf("store: update state: record audit log for %s: %w", messageID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: update state: commit: %w", err)
+	}
+	return nil
+}
+
+// ListAuditLog returns messageID's state-transition history, most recent first — the read side of
+// CW-0001 Unit 1's audit log, what an administrator reviewing a campaign's history sees.
+func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, messageID string) ([]AuditEntry, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT from_state, to_state, occurred_at FROM message_audit_log
+		WHERE message_id = $1 ORDER BY occurred_at DESC
+	`, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list audit log for %s: %w", messageID, err)
+	}
+	defer rows.Close()
+
+	var entries []AuditEntry
+	for rows.Next() {
+		var e AuditEntry
+		var from, to string
+		if err := rows.Scan(&from, &to, &e.OccurredAt); err != nil {
+			return nil, fmt.Errorf("store: scan audit entry for %s: %w", messageID, err)
+		}
+		e.FromState = model.MessageState(from)
+		e.ToState = model.MessageState(to)
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read audit log for %s: %w", messageID, err)
+	}
+	return entries, nil
 }
 
 func nullIfEmpty(s string) *string {

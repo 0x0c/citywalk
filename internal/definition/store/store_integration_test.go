@@ -151,6 +151,10 @@ func TestInsertAndGetMessageRoundTrip(t *testing.T) {
 	if _, ok := dialog.Buttons[0].Actions[0].(model.EmitEventAction); !ok {
 		t.Errorf("Variants[0].Content.Buttons[0].Actions[0] type = %T, want model.EmitEventAction", dialog.Buttons[0].Actions[0])
 	}
+
+	if got.ExperimentSalt == "" {
+		t.Error("ExperimentSalt is empty, want a non-empty value generated at insert (CW-0008 Unit 2)")
+	}
 }
 
 // TestGetMessageNotFound demonstrates GetMessage reports store.ErrNotFound for an ID nothing wrote.
@@ -161,5 +165,98 @@ func TestGetMessageNotFound(t *testing.T) {
 	_, err := store.GetMessage(ctx, pool, "00000000-0000-0000-0000-000000000000")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetMessage: err = %v, want it to wrap store.ErrNotFound", err)
+	}
+}
+
+func insertDraftMessage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, now time.Time) string {
+	t.Helper()
+	msg := &model.Message{
+		Name: "Kill switch fixture", State: model.MessageStateActive,
+		Window: model.Window{Start: now.Add(-time.Hour), End: now.Add(time.Hour)},
+		Variants: []model.Variant{{
+			Weight: 100, Language: "en", SchemaVersion: model.SchemaVersion{Major: model.CurrentMajor},
+			Content: model.DialogContent{},
+		}},
+	}
+	if err := store.InsertMessage(ctx, pool, msg); err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	return msg.ID
+}
+
+// TestUpdateStateAppliesAnAllowedTransitionAndRecordsAuditLog is CW-0001 Unit 1's kill switch end to
+// end: pausing an active campaign updates its state and leaves an audit trail of the move.
+func TestUpdateStateAppliesAnAllowedTransitionAndRecordsAuditLog(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	messageID := insertDraftMessage(t, ctx, pool, now)
+
+	if err := store.UpdateState(ctx, pool, messageID, model.MessageStatePaused, now); err != nil {
+		t.Fatalf("UpdateState: %v", err)
+	}
+
+	got, err := store.GetMessage(ctx, pool, messageID)
+	if err != nil {
+		t.Fatalf("GetMessage: %v", err)
+	}
+	if got.State != model.MessageStatePaused {
+		t.Errorf("State = %q, want %q", got.State, model.MessageStatePaused)
+	}
+
+	entries, err := store.ListAuditLog(ctx, pool, messageID)
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	if entries[0].FromState != model.MessageStateActive || entries[0].ToState != model.MessageStatePaused {
+		t.Errorf("entries[0] = %+v, want active -> paused", entries[0])
+	}
+	if !entries[0].OccurredAt.Equal(now) {
+		t.Errorf("entries[0].OccurredAt = %v, want %v", entries[0].OccurredAt, now)
+	}
+}
+
+// TestUpdateStateRejectsABackwardTransition demonstrates FR-MSG-01's "a transition only moves
+// forward" fails closed: the state is left untouched and no audit entry is written.
+func TestUpdateStateRejectsABackwardTransition(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	messageID := insertDraftMessage(t, ctx, pool, now)
+
+	if err := store.UpdateState(ctx, pool, messageID, model.MessageStateDraft, now); err == nil {
+		t.Fatal("UpdateState: got nil error moving active -> draft, want an error")
+	}
+
+	got, err := store.GetMessage(ctx, pool, messageID)
+	if err != nil {
+		t.Fatalf("GetMessage: %v", err)
+	}
+	if got.State != model.MessageStateActive {
+		t.Errorf("State = %q, want unchanged %q after a rejected transition", got.State, model.MessageStateActive)
+	}
+
+	entries, err := store.ListAuditLog(ctx, pool, messageID)
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("len(entries) = %d, want 0 (a rejected transition leaves no audit trail)", len(entries))
+	}
+}
+
+// TestUpdateStateOnUnknownMessage demonstrates the same fail-closed contract GetMessage has.
+func TestUpdateStateOnUnknownMessage(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	err := store.UpdateState(ctx, pool, "00000000-0000-0000-0000-000000000000", model.MessageStatePaused, time.Now())
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("UpdateState: err = %v, want it to wrap store.ErrNotFound", err)
 	}
 }

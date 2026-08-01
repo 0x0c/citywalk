@@ -167,7 +167,7 @@ func TestSyncRPCReturnsAPayloadThenUnchanged(t *testing.T) {
 		t.Fatalf("redisclient.New: %v", err)
 	}
 	t.Cleanup(func() { _ = redisClient.Close() })
-	for _, table := range []string{"conversion_attributions", "events_log", "segment_membership", "segments", "channel_ordinals", "channels", "messages"} {
+	for _, table := range []string{"conversion_attributions", "message_audit_log", "events_log", "segment_membership", "segments", "channel_ordinals", "channels", "messages"} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("clear %s: %v", table, err)
 		}
