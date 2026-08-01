@@ -9,12 +9,17 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/0x0c/citywalk/internal/audience/audiencetest"
 	"github.com/0x0c/citywalk/internal/audience/eval"
+	"github.com/0x0c/citywalk/internal/event/consumer"
+	"github.com/0x0c/citywalk/internal/event/ingest"
+	"github.com/0x0c/citywalk/internal/event/model"
+	"github.com/0x0c/citywalk/internal/event/ratelimit"
 	"github.com/0x0c/citywalk/internal/membership/batch"
 	"github.com/0x0c/citywalk/internal/membership/forward"
 	"github.com/0x0c/citywalk/internal/membership/incremental"
@@ -358,5 +363,77 @@ func TestRecomputeExcludesRetiredChannels(t *testing.T) {
 	}
 	if !bm.IsEmpty() {
 		t.Errorf("forward bitmap = %v, want empty (the only matching channel is retired)", bm.ToArray())
+	}
+}
+
+// TestBatchOnlySegmentMembershipReflectsRealEventRollups is CW-0004 Unit 5 end to end: a channel
+// that actually submitted enough events through CW-0009's ingestion pipeline, aggregated into
+// targeting_rollup by its consumer, qualifies for a batch_only segment reading the resulting
+// event-aggregate attribute — proving the whole path from event submission to segment membership,
+// not just that the predicate compiles.
+func TestBatchOnlySegmentMembershipReflectsRealEventRollups(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+
+	activeChannel := insertChannel(t, ctx, pool, map[string]any{"country": "JP"})
+	quietChannel := insertChannel(t, ctx, pool, map[string]any{"country": "JP"})
+
+	now := time.Now()
+	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
+
+	// Three route_screen_view events within the last 7 days qualifies activeChannel for "at least 3
+	// in the last 7 days"; one event leaves quietChannel short of it.
+	activeBatch := []model.Event{
+		{ID: "01912d2c-0000-7000-9000-000000000001", ChannelID: activeChannel, Kind: model.KindCustom, Name: "route_screen_view", DeviceTime: now.Add(-6 * time.Hour)},
+		{ID: "01912d2c-0000-7000-9000-000000000002", ChannelID: activeChannel, Kind: model.KindCustom, Name: "route_screen_view", DeviceTime: now.Add(-30 * time.Hour)},
+		{ID: "01912d2c-0000-7000-9000-000000000003", ChannelID: activeChannel, Kind: model.KindCustom, Name: "route_screen_view", DeviceTime: now.Add(-100 * time.Hour)},
+	}
+	if _, err := ingest.Accept(ctx, pool, limiter, activeChannel, activeBatch, now); err != nil {
+		t.Fatalf("Accept (active): %v", err)
+	}
+	quietBatch := []model.Event{
+		{ID: "01912d2c-0000-7000-9000-000000000004", ChannelID: quietChannel, Kind: model.KindCustom, Name: "route_screen_view", DeviceTime: now.Add(-6 * time.Hour)},
+	}
+	if _, err := ingest.Accept(ctx, pool, limiter, quietChannel, quietBatch, now); err != nil {
+		t.Fatalf("Accept (quiet): %v", err)
+	}
+	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	seg, err := segment.Save(ctx, pool, env, reg, "Active walkers", `route_screen_views_7d >= 3.0`)
+	if err != nil {
+		t.Fatalf("segment.Save: %v", err)
+	}
+	if seg.RefreshMode != segment.RefreshBatchOnly {
+		t.Fatalf("RefreshMode = %q, want batch_only", seg.RefreshMode)
+	}
+
+	if _, err := batch.Recompute(ctx, pool, redisClient, reg); err != nil {
+		t.Fatalf("batch.Recompute: %v", err)
+	}
+
+	bm, err := forward.CurrentBitmap(ctx, pool, seg.ID)
+	if err != nil {
+		t.Fatalf("forward bitmap: %v", err)
+	}
+	activeOrdinal, err := ordinal.Lookup(ctx, pool, activeChannel)
+	if err != nil {
+		t.Fatalf("lookup active ordinal: %v", err)
+	}
+	quietOrdinal, err := ordinal.Lookup(ctx, pool, quietChannel)
+	if err != nil {
+		t.Fatalf("lookup quiet ordinal: %v", err)
+	}
+	if !bm.Contains(uint32(activeOrdinal)) {
+		t.Error("segment forward index does not contain the channel with 3 events in the last 7 days")
+	}
+	if bm.Contains(uint32(quietOrdinal)) {
+		t.Error("segment forward index contains the channel with only 1 event in the last 7 days")
 	}
 }

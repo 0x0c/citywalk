@@ -54,6 +54,13 @@ type Definition struct {
 	// AggregateGranularity is set only for Source == SourceEventAggregate, and names the rollup
 	// bucket width (CW-0004 Unit 5).
 	AggregateGranularity AggregateGranularity
+	// AggregateEventName and AggregateWindowDays apply only when Source == SourceEventAggregate: the
+	// event name CW-0009's targeting_rollup groups on, and how many trailing days the sum covers.
+	// Both are baked into the definition rather than left for a predicate to parameterize — a
+	// definition named "route_screen_views_7d" fixes the event and the window at registration time,
+	// so the predicate itself, `route_screen_views_7d >= 3`, needs no runtime window argument.
+	AggregateEventName  string
+	AggregateWindowDays int
 }
 
 // Registry is the immutable set of attributes a predicate environment is built against.
@@ -72,8 +79,16 @@ func New(defs ...Definition) (*Registry, error) {
 		if _, exists := byName[def.Name]; exists {
 			return nil, fmt.Errorf("registry: duplicate attribute name %q", def.Name)
 		}
-		if def.Source == SourceEventAggregate && def.AggregateGranularity == "" {
-			return nil, fmt.Errorf("registry: attribute %q sources an event aggregate but names no granularity", def.Name)
+		if def.Source == SourceEventAggregate {
+			if def.AggregateGranularity == "" {
+				return nil, fmt.Errorf("registry: attribute %q sources an event aggregate but names no granularity", def.Name)
+			}
+			if def.AggregateEventName == "" {
+				return nil, fmt.Errorf("registry: attribute %q sources an event aggregate but names no event", def.Name)
+			}
+			if def.AggregateWindowDays <= 0 {
+				return nil, fmt.Errorf("registry: attribute %q sources an event aggregate but has a non-positive window (%d days)", def.Name, def.AggregateWindowDays)
+			}
 		}
 		byName[def.Name] = def
 	}

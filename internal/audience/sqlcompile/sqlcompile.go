@@ -223,13 +223,19 @@ func literalStringList(list celast.ListExpr) ([]string, error) {
 }
 
 // compileIdentScalar compiles a bare attribute reference into a scalar SQL expression: the jsonb
-// attributes column read by key and cast to the attribute's registered type. A string_set attribute
-// has no scalar form — it is only meaningful as an 'in' haystack — so referencing one directly is a
-// rejection naming the construct.
+// attributes column read by key and cast to the attribute's registered type, or — for an
+// event-aggregate-sourced attribute (CW-0004 Unit 5) — a correlated subquery summing CW-0009's
+// targeting_rollup instead, since that attribute's value was never written into channels.attributes
+// at all. A string_set attribute has no scalar form — it is only meaningful as an 'in' haystack — so
+// referencing one directly is a rejection naming the construct.
 func (c *compiler) compileIdentScalar(name string) (string, error) {
 	def, ok := c.reg.Lookup(name)
 	if !ok {
 		return "", fmt.Errorf("sqlcompile: unknown attribute %q", name)
+	}
+
+	if def.Source == registry.SourceEventAggregate {
+		return c.compileEventAggregate(def)
 	}
 
 	column := "(attributes->>" + c.placeholder(name) + ")"
@@ -247,6 +253,26 @@ func (c *compiler) compileIdentScalar(name string) (string, error) {
 	default:
 		return "", fmt.Errorf("sqlcompile: unknown attribute type %q for %q", def.Type, name)
 	}
+}
+
+// compileEventAggregate compiles def (Source == SourceEventAggregate) into a correlated subquery
+// over targeting_rollup, summing def.AggregateEventName's daily counts across the trailing
+// def.AggregateWindowDays days. It assumes the enclosing query aliases the channels table as "c" —
+// the one place sqlcompile's output is coupled to its caller's query shape, matching
+// batch.recomputeSegment's `FROM channel_ordinals co JOIN channels c ON c.id = co.channel_id`.
+//
+// AggregateGranularity is always "day" today (the only granularity CW-0009's rollup carries), and
+// AggregateWindowDays is always a whole number of days, so there is no predicate-level way to ask
+// for finer precision than the rollup stores — the type-checker rejection CW-0004 Unit 5 describes
+// only gets something to reject once a second, finer granularity exists to be confused with this
+// one.
+func (c *compiler) compileEventAggregate(def registry.Definition) (string, error) {
+	// pgx binds a Go int as bigint by default, and Postgres has no date - bigint operator (only
+	// date - integer), so the window-days placeholder needs an explicit cast.
+	return fmt.Sprintf(
+		"(SELECT COALESCE(sum(count), 0)::double precision FROM targeting_rollup WHERE channel_id = c.id AND event_name = %s AND day > current_date - %s::int)",
+		c.placeholder(def.AggregateEventName), c.placeholder(def.AggregateWindowDays),
+	), nil
 }
 
 func (c *compiler) compileLiteral(v ref.Val) (string, error) {

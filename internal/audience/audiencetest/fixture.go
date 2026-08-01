@@ -23,6 +23,7 @@ func Registry() *registry.Registry {
 		registry.Definition{
 			Name: "route_screen_views_7d", Type: registry.TypeNumber, Source: registry.SourceEventAggregate,
 			AggregateGranularity: registry.AggregateGranularityDay,
+			AggregateEventName:   "route_screen_view", AggregateWindowDays: 7,
 		},
 	)
 	if err != nil {

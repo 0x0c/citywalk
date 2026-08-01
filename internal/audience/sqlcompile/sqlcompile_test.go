@@ -47,6 +47,34 @@ func TestCompileToSQLProducesPlaceholdersNotInlineLiterals(t *testing.T) {
 	}
 }
 
+// TestCompileToSQLCompilesEventAggregateAsACorrelatedSubquery is CW-0004 Unit 5's set-wise half: an
+// event-aggregate-sourced attribute must compile to a subquery over targeting_rollup correlated to
+// the enclosing query's channel row, not a read of the channels.attributes column every other source
+// resolves to — that column never holds this value at all.
+func TestCompileToSQLCompilesEventAggregateAsACorrelatedSubquery(t *testing.T) {
+	sql, args := compileToSQL(t, `route_screen_views_7d >= 3.0`)
+
+	if !strings.Contains(sql, "targeting_rollup") {
+		t.Errorf("sql = %q, want it to reference targeting_rollup", sql)
+	}
+	if !strings.Contains(sql, "channel_id = c.id") {
+		t.Errorf("sql = %q, want a correlated subquery keyed on the enclosing query's channel row (c.id)", sql)
+	}
+	if strings.Contains(sql, "attributes->>") {
+		t.Errorf("sql = %q, want no read of channels.attributes for an event-aggregate attribute", sql)
+	}
+
+	found := map[string]bool{}
+	for _, a := range args {
+		if s, ok := a.(string); ok {
+			found[s] = true
+		}
+	}
+	if !found["route_screen_view"] {
+		t.Errorf("args = %v, want the registered event name %q among them", args, "route_screen_view")
+	}
+}
+
 func TestCompileToSQLRejectsUnknownAttribute(t *testing.T) {
 	env, err := audiencetest.Env()
 	if err != nil {
