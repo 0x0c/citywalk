@@ -33,12 +33,18 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// DeliveryServiceSyncProcedure is the fully-qualified name of the DeliveryService's Sync RPC.
+	DeliveryServiceSyncProcedure = "/citywalk.delivery.v1.DeliveryService/Sync"
 	// DeliveryServiceConfirmProcedure is the fully-qualified name of the DeliveryService's Confirm RPC.
 	DeliveryServiceConfirmProcedure = "/citywalk.delivery.v1.DeliveryService/Confirm"
 )
 
 // DeliveryServiceClient is a client for the citywalk.delivery.v1.DeliveryService service.
 type DeliveryServiceClient interface {
+	// Sync answers a channel's synchronization request (CW-0006 Unit 2): when etag matches what the
+	// server would compute, it returns Unchanged with no entries — the conditional request's whole
+	// point is that this path costs a cache lookup, not a full payload assembly.
+	Sync(context.Context, *connect.Request[v1.SyncRequest]) (*connect.Response[v1.SyncResponse], error)
 	// Confirm answers whether a server-confirmed message may display right now. The device calls this
 	// immediately before displaying and shows the message only on Approved == true: a timeout or an
 	// error suppresses the display rather than allowing it.
@@ -56,6 +62,12 @@ func NewDeliveryServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 	baseURL = strings.TrimRight(baseURL, "/")
 	deliveryServiceMethods := v1.File_citywalk_delivery_v1_delivery_proto.Services().ByName("DeliveryService").Methods()
 	return &deliveryServiceClient{
+		sync: connect.NewClient[v1.SyncRequest, v1.SyncResponse](
+			httpClient,
+			baseURL+DeliveryServiceSyncProcedure,
+			connect.WithSchema(deliveryServiceMethods.ByName("Sync")),
+			connect.WithClientOptions(opts...),
+		),
 		confirm: connect.NewClient[v1.ConfirmRequest, v1.ConfirmResponse](
 			httpClient,
 			baseURL+DeliveryServiceConfirmProcedure,
@@ -67,7 +79,13 @@ func NewDeliveryServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 
 // deliveryServiceClient implements DeliveryServiceClient.
 type deliveryServiceClient struct {
+	sync    *connect.Client[v1.SyncRequest, v1.SyncResponse]
 	confirm *connect.Client[v1.ConfirmRequest, v1.ConfirmResponse]
+}
+
+// Sync calls citywalk.delivery.v1.DeliveryService.Sync.
+func (c *deliveryServiceClient) Sync(ctx context.Context, req *connect.Request[v1.SyncRequest]) (*connect.Response[v1.SyncResponse], error) {
+	return c.sync.CallUnary(ctx, req)
 }
 
 // Confirm calls citywalk.delivery.v1.DeliveryService.Confirm.
@@ -77,6 +95,10 @@ func (c *deliveryServiceClient) Confirm(ctx context.Context, req *connect.Reques
 
 // DeliveryServiceHandler is an implementation of the citywalk.delivery.v1.DeliveryService service.
 type DeliveryServiceHandler interface {
+	// Sync answers a channel's synchronization request (CW-0006 Unit 2): when etag matches what the
+	// server would compute, it returns Unchanged with no entries — the conditional request's whole
+	// point is that this path costs a cache lookup, not a full payload assembly.
+	Sync(context.Context, *connect.Request[v1.SyncRequest]) (*connect.Response[v1.SyncResponse], error)
 	// Confirm answers whether a server-confirmed message may display right now. The device calls this
 	// immediately before displaying and shows the message only on Approved == true: a timeout or an
 	// error suppresses the display rather than allowing it.
@@ -90,6 +112,12 @@ type DeliveryServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewDeliveryServiceHandler(svc DeliveryServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	deliveryServiceMethods := v1.File_citywalk_delivery_v1_delivery_proto.Services().ByName("DeliveryService").Methods()
+	deliveryServiceSyncHandler := connect.NewUnaryHandler(
+		DeliveryServiceSyncProcedure,
+		svc.Sync,
+		connect.WithSchema(deliveryServiceMethods.ByName("Sync")),
+		connect.WithHandlerOptions(opts...),
+	)
 	deliveryServiceConfirmHandler := connect.NewUnaryHandler(
 		DeliveryServiceConfirmProcedure,
 		svc.Confirm,
@@ -98,6 +126,8 @@ func NewDeliveryServiceHandler(svc DeliveryServiceHandler, opts ...connect.Handl
 	)
 	return "/citywalk.delivery.v1.DeliveryService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case DeliveryServiceSyncProcedure:
+			deliveryServiceSyncHandler.ServeHTTP(w, r)
 		case DeliveryServiceConfirmProcedure:
 			deliveryServiceConfirmHandler.ServeHTTP(w, r)
 		default:
@@ -108,6 +138,10 @@ func NewDeliveryServiceHandler(svc DeliveryServiceHandler, opts ...connect.Handl
 
 // UnimplementedDeliveryServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedDeliveryServiceHandler struct{}
+
+func (UnimplementedDeliveryServiceHandler) Sync(context.Context, *connect.Request[v1.SyncRequest]) (*connect.Response[v1.SyncResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("citywalk.delivery.v1.DeliveryService.Sync is not implemented"))
+}
 
 func (UnimplementedDeliveryServiceHandler) Confirm(context.Context, *connect.Request[v1.ConfirmRequest]) (*connect.Response[v1.ConfirmResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("citywalk.delivery.v1.DeliveryService.Confirm is not implemented"))

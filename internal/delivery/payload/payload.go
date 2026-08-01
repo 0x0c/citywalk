@@ -1,6 +1,8 @@
 // Package payload implements CW-0002 Units 1 through 3: assembling the payload a device receives
 // from the definitions it is eligible for, per the boundary rule (audience data never crosses into
-// the payload) and the payload contract (complete, self-expiring, size-capped).
+// the payload) and the payload contract (complete, self-expiring, size-capped). It also implements
+// CW-0006 Unit 6's size ceiling and cohort-labeled truncation metric — CW-0002's payload contract
+// and CW-0006's transport protocol share this one assembly path rather than each keeping its own.
 package payload
 
 import (
@@ -11,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/0x0c/citywalk/internal/definition/model"
@@ -26,6 +29,8 @@ import (
 type Entry struct {
 	MessageID         string
 	Version           int
+	VariantID         string
+	SchemaVersion     model.SchemaVersion
 	Priority          int
 	Content           []byte
 	Triggers          []model.Trigger
@@ -109,7 +114,12 @@ func Build(
 
 	entries, truncated := truncate(entries, sizeCeilingBytes)
 	if truncated > 0 {
-		truncationCounter.Add(ctx, int64(truncated))
+		// Labeled by language — the cohort dimension Build actually has on hand — per CW-0006 Unit
+		// 6: the metric must name the cohort, not just the count, so a project that has quietly
+		// outgrown the ceiling for one locale doesn't hide behind an aggregate that looks fine.
+		truncationCounter.Add(ctx, int64(truncated), metric.WithAttributes(
+			attribute.String("citywalk.delivery.language", language),
+		))
 	}
 
 	return Payload{Entries: entries, NextSyncAt: nextSync}, nil
@@ -138,6 +148,8 @@ func buildEntry(msg model.Message, language string) (Entry, error) {
 	return Entry{
 		MessageID:         msg.ID,
 		Version:           msg.Version,
+		VariantID:         variant.ID,
+		SchemaVersion:     variant.SchemaVersion,
 		Priority:          msg.Priority,
 		Content:           content,
 		Triggers:          msg.Triggers,

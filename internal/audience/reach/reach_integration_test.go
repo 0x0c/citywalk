@@ -17,9 +17,16 @@ import (
 	"github.com/0x0c/citywalk/migrations"
 )
 
-// TestEstimateReachOnAKnownPopulation seeds a population where exactly a known fraction matches,
-// and checks the estimate's confidence interval actually contains the true count — the property
-// CW-0004 Unit 6 exists to give an author, rather than a bare number with no sense of its error.
+// TestEstimateReachOnAKnownPopulation seeds a population where exactly a known fraction matches and
+// checks the estimate against real Postgres sampling. It intentionally does not assert that the
+// returned 95%-confidence interval contains the true count: at a real 95% confidence level, that
+// assertion is expected to fail on roughly one run in twenty by construction, which is exactly the
+// kind of test that must never depend on an outcome the code does not guarantee outright. The
+// interval math itself (does the formula compute a correct 95% interval) is covered instead by the
+// deterministic wilson_internal_test.go, which needs no sampling and cannot flake. What this test
+// checks is a bound wide enough that a real bug (sampling from the wrong table, an inverted
+// predicate, a broken proportion calculation) would still be caught, while pure sampling variance at
+// n=500 essentially never crosses it.
 func TestEstimateReachOnAKnownPopulation(t *testing.T) {
 	dsn := os.Getenv("CITYWALK_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -76,11 +83,19 @@ func TestEstimateReachOnAKnownPopulation(t *testing.T) {
 	if est.SampleSize != 500 {
 		t.Errorf("SampleSize = %d, want 500", est.SampleSize)
 	}
+	// Low <= Count <= High is guaranteed by construction (wilsonInterval always brackets its own
+	// center), so this checks the wiring rather than the statistics.
 	if est.Low > est.Count || est.Count > est.High {
 		t.Errorf("interval [%d, %d] does not contain Count %d", est.Low, est.High, est.Count)
 	}
-	if est.Low > matchingCount || matchingCount > est.High {
-		t.Errorf("interval [%d, %d] does not contain the true count %d", est.Low, est.High, matchingCount)
+
+	// A generous sanity bound, not the 95% CI: at n=500 sampled from a true 30% proportion, the
+	// sampling standard deviation is about sqrt(500*0.3*0.7) ~= 10.2 in sample-count terms, roughly
+	// 2% of the population once scaled up. +/-20% of the true count is about ten standard
+	// deviations — a real bug shows up here reliably, while sampling noise essentially never does.
+	tolerance := int(0.2 * float64(matchingCount))
+	if diff := est.Count - matchingCount; diff > tolerance || diff < -tolerance {
+		t.Errorf("Count = %d, want within %d of the true count %d (got %+d)", est.Count, tolerance, matchingCount, diff)
 	}
 }
 
