@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0001](CW-0001-in-app-message-platform-scope.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Platform |
 | Related | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md), [CW-0010](../CW-0010-runtime-technology-stack/CW-0010-runtime-technology-stack.md) |
 <!-- /CW-METADATA -->
@@ -159,10 +159,32 @@ split, which is why it is a separate item rather than a paragraph here.
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
 - [ ] Unit 1 — Definition service: schema, administrative API, validation, audit log, kill switch.
+      CW-0003's schema, save-time validation, and a minimal insert/get store exist and are tested.
+      Missing: the administrative API's full create/update/delete/publish surface, the audit log, and
+      the kill switch — none of which CW-0003 itself scopes as its own unit, so they remain this
+      unit's own open work.
 - [ ] Unit 2 — Audience service: predicate evaluation and segment membership.
+      CW-0004's predicate language and evaluator and CW-0005's membership index are both implemented
+      and tested; a channel's eligible set resolves end to end through the reverse index CW-0002's
+      payload assembly reads. Left unchecked because neither CW-0004 nor CW-0005 itself is marked
+      Implemented yet (each still carries its own open sub-items) — this box mirrors theirs rather
+      than reaching a more finished-sounding state on its own account.
 - [ ] Unit 3 — Delivery service: payload assembly, variant selection, synchronization.
+      CW-0002's payload assembly and CW-0006's delta synchronization protocol work end to end against
+      real Postgres and Redis. Variant selection is by language only; CW-0008's experiment and holdout
+      assignment is implemented as a standalone, tested package but is not yet called from this path,
+      so "applies the experiment and holdout assignment" is not yet true of the live delivery code.
 - [ ] Unit 4 — Ingestion service: event acceptance, deduplication, and publication.
+      CW-0009's acceptance, per-channel rate limiting, identifier-based deduplication, and rollup
+      consumption are implemented and tested. "Publishes them onto a stream" is phase-one Postgres
+      (documented in `migrations/0006_events.sql`), not a real stream a second consumer could scale
+      across independently — CW-0009's own Unit 3 note covers this in detail.
 - [ ] Unit 5 — Governance: device-side caps and priority, server-side project caps and confirmation.
+      The server-side half — CW-0007's project-wide budget, its atomic strict-confirmation decrement,
+      and suppression telemetry — is implemented and tested. The device-side half (per-message caps,
+      priority resolution, candidate lifecycle) is permanently out of scope for this repository, per
+      `docs/requirements.md`; this unit's checkbox can therefore never fully close from server-side
+      work alone, which is stated here rather than left to look like an oversight.
 
 ## References
 
