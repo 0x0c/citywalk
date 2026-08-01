@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package citywalk.platform.v1;
+
+option go_package = "github.com/0x0c/citywalk/gen/citywalk/platform/v1;platformv1";
+
+// HealthService reports the liveness of the running process. It is the first
+// Connect service in the platform and exists to prove the transport and the
+// single-process phase-one wiring (CW-0010 Unit 2, Unit 11) end to end.
+service HealthService {
+  // Check reports whether the process is ready to serve traffic.
+  rpc Check(CheckRequest) returns (CheckResponse);
+}
+
+message CheckRequest {}
+
+message CheckResponse {
+  ServingStatus status = 1;
+}
+
+enum ServingStatus {
+  SERVING_STATUS_UNSPECIFIED = 0;
+  SERVING_STATUS_SERVING = 1;
+  SERVING_STATUS_NOT_SERVING = 2;
+}

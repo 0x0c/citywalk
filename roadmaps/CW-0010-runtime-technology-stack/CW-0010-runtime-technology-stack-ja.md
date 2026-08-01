@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [CW-0010](CW-0010-runtime-technology-stack-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **提案** |
+| 状態 | **実装中** |
 | トピック | プラットフォーム |
 | 関連 | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope-ja.md)、[CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync-ja.md)、[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) |
 <!-- /CW-METADATA -->

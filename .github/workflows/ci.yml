@@ -1,0 +1,100 @@
+# The mechanical gate every Go change must pass (.agent-workflows/implement/workflow.md step 7):
+# gofmt, go vet, golangci-lint, build, and both the unit and Postgres-backed integration test
+# suites. Nothing merges past a red run here.
+name: CI
+
+on:
+  push:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - "proto/**"
+      - "migrations/**"
+      - ".golangci.yml"
+      - "Makefile"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - "proto/**"
+      - "migrations/**"
+      - ".golangci.yml"
+      - "Makefile"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: gofmt, vet, lint, build, test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: citywalk
+          POSTGRES_PASSWORD: citywalk
+          POSTGRES_DB: citywalk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U citywalk"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      - name: Regenerate protobuf code and diff against the committed gen/
+        run: |
+          make generate
+          git diff --exit-code -- gen/
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test (unit)
+        run: go test ./...
+
+      - name: go test (integration)
+        env:
+          CITYWALK_TEST_POSTGRES_DSN: postgres://citywalk:citywalk@localhost:5432/citywalk_test?sslmode=disable
+          CITYWALK_TEST_REDIS_ADDR: localhost:6379
+        run: go test -tags=integration ./...
