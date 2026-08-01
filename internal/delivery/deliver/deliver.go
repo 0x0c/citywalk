@@ -15,6 +15,7 @@ import (
 	"github.com/0x0c/citywalk/internal/delivery/etag"
 	"github.com/0x0c/citywalk/internal/delivery/payload"
 	deliverysync "github.com/0x0c/citywalk/internal/delivery/sync"
+	"github.com/0x0c/citywalk/internal/governance/budget"
 )
 
 // Config holds the parameters Sync needs beyond the request itself.
@@ -26,6 +27,11 @@ type Config struct {
 	// "short expiry" the unit names, inside which a repeat synchronization is a single Redis lookup
 	// rather than a full assembly.
 	TagCacheTTL time.Duration
+	// ProjectBudgetCap and ProjectBudgetWindow configure CW-0007 Unit 5's budget issuance. A zero
+	// ProjectBudgetCap disables issuance entirely — Payload.ProjectBudgetRemaining stays nil — which
+	// is what every caller that predates CW-0007 gets by leaving these fields unset.
+	ProjectBudgetCap    int
+	ProjectBudgetWindow time.Duration
 }
 
 // Result is what a synchronization resolves to: either Unchanged (no Payload — the device already
@@ -75,5 +81,15 @@ func Sync(
 	if clientETag != "" && tag == clientETag {
 		return Result{ETag: tag, Unchanged: true, NextSyncAt: p.NextSyncAt}, nil
 	}
+
+	if cfg.ProjectBudgetCap > 0 {
+		counter := budget.Counter{Redis: redisClient, Window: cfg.ProjectBudgetWindow}
+		remaining, err := counter.Remaining(ctx, channelID, cfg.ProjectBudgetCap, now)
+		if err != nil {
+			return Result{}, fmt.Errorf("deliver: read project budget: %w", err)
+		}
+		p.ProjectBudgetRemaining = &remaining
+	}
+
 	return Result{ETag: tag, Payload: &p, NextSyncAt: p.NextSyncAt}, nil
 }

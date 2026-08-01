@@ -55,6 +55,10 @@ message SyncResponse {
   // entries is empty when unchanged is true.
   repeated Entry entries = 3;
   google.protobuf.Timestamp next_sync_at = 4;
+  // project_budget_remaining is CW-0007 Unit 5's issuance: the estimated remaining project-wide
+  // impression budget as of this assembly. Absent (not just zero) when no budget is configured for
+  // this synchronization — proto3 `optional` carries that distinction across the wire.
+  optional int32 project_budget_remaining = 5;
 }
 
 message ConfirmRequest {

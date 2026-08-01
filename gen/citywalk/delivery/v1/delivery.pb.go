@@ -220,10 +220,14 @@ type SyncResponse struct {
 	Unchanged bool                   `protobuf:"varint,1,opt,name=unchanged,proto3" json:"unchanged,omitempty"`
 	Etag      string                 `protobuf:"bytes,2,opt,name=etag,proto3" json:"etag,omitempty"`
 	// entries is empty when unchanged is true.
-	Entries       []*Entry               `protobuf:"bytes,3,rep,name=entries,proto3" json:"entries,omitempty"`
-	NextSyncAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=next_sync_at,json=nextSyncAt,proto3" json:"next_sync_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Entries    []*Entry               `protobuf:"bytes,3,rep,name=entries,proto3" json:"entries,omitempty"`
+	NextSyncAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=next_sync_at,json=nextSyncAt,proto3" json:"next_sync_at,omitempty"`
+	// project_budget_remaining is CW-0007 Unit 5's issuance: the estimated remaining project-wide
+	// impression budget as of this assembly. Absent (not just zero) when no budget is configured for
+	// this synchronization — proto3 `optional` carries that distinction across the wire.
+	ProjectBudgetRemaining *int32 `protobuf:"varint,5,opt,name=project_budget_remaining,json=projectBudgetRemaining,proto3,oneof" json:"project_budget_remaining,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *SyncResponse) Reset() {
@@ -282,6 +286,13 @@ func (x *SyncResponse) GetNextSyncAt() *timestamppb.Timestamp {
 		return x.NextSyncAt
 	}
 	return nil
+}
+
+func (x *SyncResponse) GetProjectBudgetRemaining() int32 {
+	if x != nil && x.ProjectBudgetRemaining != nil {
+		return *x.ProjectBudgetRemaining
+	}
+	return 0
 }
 
 type ConfirmRequest struct {
@@ -409,13 +420,15 @@ const file_citywalk_delivery_v1_delivery_proto_rawDesc = "" +
 	"\x13control_policy_json\x18\n" +
 	" \x01(\fR\x11controlPolicyJson\x129\n" +
 	"\n" +
-	"expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xb5\x01\n" +
+	"expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\x91\x02\n" +
 	"\fSyncResponse\x12\x1c\n" +
 	"\tunchanged\x18\x01 \x01(\bR\tunchanged\x12\x12\n" +
 	"\x04etag\x18\x02 \x01(\tR\x04etag\x125\n" +
 	"\aentries\x18\x03 \x03(\v2\x1b.citywalk.delivery.v1.EntryR\aentries\x12<\n" +
 	"\fnext_sync_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"nextSyncAt\"N\n" +
+	"nextSyncAt\x12=\n" +
+	"\x18project_budget_remaining\x18\x05 \x01(\x05H\x00R\x16projectBudgetRemaining\x88\x01\x01B\x1b\n" +
+	"\x19_project_budget_remaining\"N\n" +
 	"\x0eConfirmRequest\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x1d\n" +
@@ -469,6 +482,7 @@ func file_citywalk_delivery_v1_delivery_proto_init() {
 	if File_citywalk_delivery_v1_delivery_proto != nil {
 		return
 	}
+	file_citywalk_delivery_v1_delivery_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -19,6 +19,7 @@ import (
 	"github.com/0x0c/citywalk/internal/event/model"
 	"github.com/0x0c/citywalk/internal/event/ratelimit"
 	"github.com/0x0c/citywalk/internal/event/report"
+	"github.com/0x0c/citywalk/internal/governance/budget"
 	"github.com/0x0c/citywalk/internal/platform/postgres"
 	"github.com/0x0c/citywalk/internal/platform/redisclient"
 	"github.com/0x0c/citywalk/migrations"
@@ -134,7 +135,8 @@ func TestAcceptDedupsAndAggregates(t *testing.T) {
 		t.Errorf("Accept() on resend = %d accepted, want 0 (deduplicated)", resend.Accepted)
 	}
 
-	processed, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100)
+	budgetCounter := &budget.Counter{Redis: redisClient, Window: 24 * time.Hour}
+	processed, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, budgetCounter)
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
@@ -160,9 +162,19 @@ func TestAcceptDedupsAndAggregates(t *testing.T) {
 		t.Errorf("report.Variants() = %+v, want one variant with 1 impression", reports)
 	}
 
+	// CW-0007 Unit 5's reconciliation: the one impression in this batch must have been folded into
+	// channelID's project budget counter by RunOnce, even though nothing ever called Confirm.
+	remaining, err := budgetCounter.Remaining(ctx, channelID, 2, now)
+	if err != nil {
+		t.Fatalf("budgetCounter.Remaining: %v", err)
+	}
+	if remaining != 1 {
+		t.Errorf("budget remaining after one reconciled impression = %d, want 1 (cap 2 minus 1)", remaining)
+	}
+
 	// Running the consumer again with nothing new to process must advance nothing further and
 	// report zero processed — the idempotency Unit 3 requires of every consumer.
-	again, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100)
+	again, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, budgetCounter)
 	if err != nil {
 		t.Fatalf("RunOnce (again): %v", err)
 	}
@@ -288,7 +300,7 @@ func TestSuppressionReportBreaksDownByReason(t *testing.T) {
 	if _, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
-	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100); err != nil {
+	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
 

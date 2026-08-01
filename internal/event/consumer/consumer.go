@@ -19,6 +19,7 @@ import (
 
 	"github.com/0x0c/citywalk/internal/event/hll"
 	"github.com/0x0c/citywalk/internal/event/model"
+	"github.com/0x0c/citywalk/internal/governance/budget"
 )
 
 // TargetingRollupConsumer is the fixed name of CW-0009's one built-in rollup consumer. A future
@@ -58,7 +59,16 @@ func (e storedEvent) eventName() string {
 // applying each to the rollups, and returns how many it processed. Zero means nothing new had
 // arrived. Call it on a schedule (a cron, a background loop); CW-0009 does not itself define that
 // schedule, since "how often" is an operational choice this pass leaves to the deployment.
-func RunOnce(ctx context.Context, pool *pgxpool.Pool, consumerName string, batchLimit int) (int, error) {
+//
+// budgetCounter is CW-0007 Unit 5's reconciliation hook: when non-nil, every impression in the batch
+// also increments the reporting channel's project-wide budget counter, which is what keeps the
+// budget accurate against impressions the device actually delivered rather than only the ones this
+// server happened to hand out through Confirm. Pass nil to skip it entirely (e.g. a deployment that
+// hasn't wired CW-0007 in, or a test exercising CW-0009 in isolation). The Redis update happens after
+// the transaction below commits, not inside it: Redis has no part in that transaction's atomicity,
+// so recording it first and having the commit fail would count an impression this consumer never
+// actually finished processing.
+func RunOnce(ctx context.Context, pool *pgxpool.Pool, consumerName string, batchLimit int, budgetCounter *budget.Counter) (int, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("consumer: begin: %w", err)
@@ -116,6 +126,18 @@ func RunOnce(ctx context.Context, pool *pgxpool.Pool, consumerName string, batch
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("consumer: commit: %w", err)
 	}
+
+	if budgetCounter != nil {
+		for _, e := range events {
+			if e.Kind != model.KindImpression {
+				continue
+			}
+			if err := budgetCounter.RecordImpression(ctx, e.ChannelID, e.DeviceTime); err != nil {
+				return 0, fmt.Errorf("consumer: reconcile project budget for event seq %d: %w", e.Seq, err)
+			}
+		}
+	}
+
 	return len(events), nil
 }
 

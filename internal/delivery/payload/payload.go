@@ -44,6 +44,13 @@ type Entry struct {
 type Payload struct {
 	Entries    []Entry
 	NextSyncAt time.Time
+	// ProjectBudgetRemaining is CW-0007 Unit 5's issuance: the estimated remaining project-wide
+	// impression budget as of this assembly, for the device to spend locally. nil means the caller
+	// (deliver.Sync) has no budget configured for this synchronization — distinct from a real zero,
+	// which means the budget is fully spent. Build itself never sets this; it is out of payload
+	// assembly's own scope (CW-0002/CW-0006) and is filled in by whichever caller has a budget
+	// configuration to apply.
+	ProjectBudgetRemaining *int
 }
 
 // truncationCounter records CW-0010 Unit 10's named payload-truncation-count metric: a truncation

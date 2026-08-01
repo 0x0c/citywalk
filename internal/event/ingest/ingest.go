@@ -137,3 +137,19 @@ func nullIfEmpty(s string) *string {
 	}
 	return &s
 }
+
+// Record appends a single server-generated event directly to the log: unlike Accept, it skips the
+// per-channel rate limit, since that ceiling (Unit 2) exists to bound device-submitted volume, not an
+// event the server itself emits — for example, CW-0007's governance layer recording a suppression it
+// just decided. e must already be a fully formed, valid event; Record still runs Validate so a
+// programming error here fails loudly rather than writing a malformed row.
+func Record(ctx context.Context, pool *pgxpool.Pool, e model.Event, now time.Time) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("ingest: record: %w", err)
+	}
+	_, err := appendToLog(ctx, pool, []model.Event{e}, now)
+	if err != nil {
+		return fmt.Errorf("ingest: record: %w", err)
+	}
+	return nil
+}
