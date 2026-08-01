@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/0x0c/citywalk/internal/platform/config"
 	"github.com/0x0c/citywalk/internal/platform/connectserver"
 	"github.com/0x0c/citywalk/internal/platform/observability"
@@ -50,8 +52,9 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
+	var pool *pgxpool.Pool
 	if cfg.PostgresDSN != "" {
-		pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
+		pool, err = postgres.NewPool(ctx, cfg.PostgresDSN)
 		if err != nil {
 			return fmt.Errorf("connect to postgres: %w", err)
 		}
@@ -80,7 +83,7 @@ func run(logger *slog.Logger) error {
 		logger.Warn("CITYWALK_REDIS_ADDR not set, running without redis")
 	}
 
-	mux, err := connectserver.NewMux()
+	mux, err := connectserver.NewMux(pool)
 	if err != nil {
 		return fmt.Errorf("build connect mux: %w", err)
 	}

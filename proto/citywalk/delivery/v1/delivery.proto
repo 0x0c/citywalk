@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package citywalk.delivery.v1;
+
+option go_package = "github.com/0x0c/citywalk/gen/citywalk/delivery/v1;deliveryv1";
+
+// DeliveryService is the device-facing surface CW-0002 describes: the payload synchronization
+// endpoint (CW-0006's job to add here) and the server confirmation escape hatch (CW-0002 Unit 4).
+service DeliveryService {
+  // Confirm answers whether a server-confirmed message may display right now. The device calls this
+  // immediately before displaying and shows the message only on Approved == true: a timeout or an
+  // error suppresses the display rather than allowing it.
+  rpc Confirm(ConfirmRequest) returns (ConfirmResponse);
+}
+
+message ConfirmRequest {
+  // channel_id is declared for FR-API-08's wire shape, but no handler should ever trust it: CW-0010
+  // Unit 9 binds the channel identity to the authenticated request's token and ignores whatever a
+  // request names here. Channel authentication isn't built yet, so today's handler has no channel
+  // identity to check confirm.Confirm's result against at all, and does not read this field.
+  string channel_id = 1;
+  string message_id = 2;
+}
+
+message ConfirmResponse {
+  bool approved = 1;
+}

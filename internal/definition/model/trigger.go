@@ -44,4 +44,9 @@ type ControlPolicy struct {
 	PerMessageCap        int
 	MinIntervalBetween   time.Duration
 	ExemptFromProjectCap bool
+	// RequiresServerConfirmation is CW-0002 Unit 4's escape hatch: the device calls one endpoint
+	// immediately before displaying and shows the message only on an explicit yes. Restraint is the
+	// point — this defaults false, and the administrative interface (not built yet) is what would
+	// make setting it a visible, per-campaign exception rather than a default.
+	RequiresServerConfirmation bool
 }

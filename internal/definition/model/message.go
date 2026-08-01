@@ -47,11 +47,15 @@ type Window struct {
 // never leaves the server — CW-0002's delivery boundary depends on that holding, so it carries no
 // json tag and is never included in any payload encoding.
 type Message struct {
-	ID                string
-	Name              string
-	State             MessageState
-	Priority          int
-	Window            Window
+	ID       string
+	Name     string
+	State    MessageState
+	Priority int
+	Window   Window
+	// Version increments on every save. CW-0001 Unit 1's full publish-a-new-version-rather-than-
+	// mutate workflow isn't built yet — this is the minimal counter CW-0002 Unit 2's payload
+	// contract needs a device to detect a change by, ahead of that fuller mechanism.
+	Version           int
 	AudienceRef       string
 	ControlPolicy     ControlPolicy
 	HoldoutFraction   float64

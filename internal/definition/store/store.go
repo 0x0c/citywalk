@@ -29,19 +29,22 @@ func InsertMessage(ctx context.Context, pool *pgxpool.Pool, msg *model.Message) 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if msg.Version == 0 {
+		msg.Version = 1
+	}
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO messages (name, state, priority, window_start, window_end, audience_ref, holdout_fraction, conversion_event)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO messages (name, state, priority, window_start, window_end, audience_ref, holdout_fraction, conversion_event, version)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
-	`, msg.Name, string(msg.State), msg.Priority, msg.Window.Start, msg.Window.End, nullIfEmpty(msg.AudienceRef), msg.HoldoutFraction, nullIfEmpty(msg.ConversionEvent),
+	`, msg.Name, string(msg.State), msg.Priority, msg.Window.Start, msg.Window.End, nullIfEmpty(msg.AudienceRef), msg.HoldoutFraction, nullIfEmpty(msg.ConversionEvent), msg.Version,
 	).Scan(&msg.ID); err != nil {
 		return fmt.Errorf("store: insert message: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO control_policies (message_id, per_message_cap, min_interval_seconds, exempt_from_project_cap)
-		VALUES ($1, $2, $3, $4)
-	`, msg.ID, msg.ControlPolicy.PerMessageCap, int(msg.ControlPolicy.MinIntervalBetween.Seconds()), msg.ControlPolicy.ExemptFromProjectCap,
+		INSERT INTO control_policies (message_id, per_message_cap, min_interval_seconds, exempt_from_project_cap, requires_server_confirmation)
+		VALUES ($1, $2, $3, $4, $5)
+	`, msg.ID, msg.ControlPolicy.PerMessageCap, int(msg.ControlPolicy.MinIntervalBetween.Seconds()), msg.ControlPolicy.ExemptFromProjectCap, msg.ControlPolicy.RequiresServerConfirmation,
 	); err != nil {
 		return fmt.Errorf("store: insert control policy: %w", err)
 	}
@@ -96,11 +99,11 @@ func GetMessage(ctx context.Context, pool *pgxpool.Pool, id string) (model.Messa
 	var state string
 	var audienceRef, conversionEvent *string
 	if err := pool.QueryRow(ctx, `
-		SELECT id, name, state, priority, window_start, window_end, audience_ref, holdout_fraction, conversion_event
+		SELECT id, name, state, priority, window_start, window_end, audience_ref, holdout_fraction, conversion_event, version
 		FROM messages WHERE id = $1
 	`, id).Scan(
 		&msg.ID, &msg.Name, &state, &msg.Priority, &msg.Window.Start, &msg.Window.End,
-		&audienceRef, &msg.HoldoutFraction, &conversionEvent,
+		&audienceRef, &msg.HoldoutFraction, &conversionEvent, &msg.Version,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.Message{}, fmt.Errorf("store: get message %s: %w", id, ErrNotFound)
@@ -113,9 +116,12 @@ func GetMessage(ctx context.Context, pool *pgxpool.Pool, id string) (model.Messa
 
 	var minIntervalSeconds int
 	if err := pool.QueryRow(ctx, `
-		SELECT per_message_cap, min_interval_seconds, exempt_from_project_cap
+		SELECT per_message_cap, min_interval_seconds, exempt_from_project_cap, requires_server_confirmation
 		FROM control_policies WHERE message_id = $1
-	`, id).Scan(&msg.ControlPolicy.PerMessageCap, &minIntervalSeconds, &msg.ControlPolicy.ExemptFromProjectCap); err != nil {
+	`, id).Scan(
+		&msg.ControlPolicy.PerMessageCap, &minIntervalSeconds, &msg.ControlPolicy.ExemptFromProjectCap,
+		&msg.ControlPolicy.RequiresServerConfirmation,
+	); err != nil {
 		return model.Message{}, fmt.Errorf("store: get control policy for message %s: %w", id, err)
 	}
 	msg.ControlPolicy.MinIntervalBetween = time.Duration(minIntervalSeconds) * time.Second

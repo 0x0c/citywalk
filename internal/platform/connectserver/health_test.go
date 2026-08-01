@@ -17,7 +17,7 @@ import (
 // requirement-to-test mapping applies once a service actually claims a requirement; this test
 // exists to prove the transport wiring the later services build on).
 func TestHealthCheckReportsServing(t *testing.T) {
-	mux, err := connectserver.NewMux()
+	mux, err := connectserver.NewMux(nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
