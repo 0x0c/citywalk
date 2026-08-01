@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0008](CW-0008-deterministic-experiment-assignment.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Targeting |
 | Related | [CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema.md), [CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md) |
 <!-- /CW-METADATA -->
@@ -148,11 +148,20 @@ modulo on a negative hash.
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
 - [ ] Unit 1 — Identity selection and the display-time pin that survives a login.
-- [ ] Unit 2 — The salted bucketing function over ten thousand buckets.
-- [ ] Unit 3 — The explicit range table and a reweight that moves the fewest buckets.
-- [ ] Unit 4 — Campaign holdouts as reserved ranges, and the project-wide control group.
+      Identity selection (user identifier, falling back to the channel identifier) is implemented
+      and tested. The display-time pin is client SDK behavior, permanently out of scope for this
+      repository; reading the recorded variant back for analysis needs the event pipeline (CW-0009),
+      which doesn't exist yet.
+- [x] Unit 2 — The salted bucketing function over ten thousand buckets.
+- [x] Unit 3 — The explicit range table and a reweight that moves the fewest buckets.
+- [x] Unit 4 — Campaign holdouts as reserved ranges, and the project-wide control group.
 - [ ] Unit 5 — Holdout qualification events, and reporting from the recorded variant.
-- [ ] Unit 6 — Automated uniformity and server-to-device parity tests.
+      Not built. Both halves need the event ingestion pipeline (CW-0009) to actually record and read
+      anything; nothing here has a store to write to yet.
+- [x] Unit 6 — Automated uniformity and server-to-device parity tests.
+      The uniformity test and the fixture parity table are both implemented — the fixture is the
+      server-side artifact a device implementation would be checked against, since no device
+      implementation exists in this repository to test against directly.
 
 ## References
 
