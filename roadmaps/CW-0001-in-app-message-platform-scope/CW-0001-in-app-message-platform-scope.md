@@ -171,12 +171,12 @@ split, which is why it is a separate item rather than a paragraph here.
       is archived rather than deleted (`MessageStateArchived`, reachable through UpdateMessageState),
       matching the "publish a new version instead of mutating one" rule this unit's own design states
       — there is no endpoint to edit a draft's content in place once created.
-- [ ] Unit 2 — Audience service: predicate evaluation and segment membership.
+- [x] Unit 2 — Audience service: predicate evaluation and segment membership.
       CW-0004's predicate language and evaluator and CW-0005's membership index are both implemented
       and tested; a channel's eligible set resolves end to end through the reverse index CW-0002's
-      payload assembly reads. Left unchecked because neither CW-0004 nor CW-0005 itself is marked
-      Implemented yet (each still carries its own open sub-items) — this box mirrors theirs rather
-      than reaching a more finished-sounding state on its own account.
+      payload assembly reads. Checked now that both CW-0004 and CW-0005 are themselves marked
+      Implemented — this box has always mirrored theirs rather than reaching a more finished-sounding
+      state on its own account.
 - [ ] Unit 3 — Delivery service: payload assembly, variant selection, synchronization.
       CW-0002's payload assembly, CW-0006's delta synchronization protocol, and CW-0008's experiment
       and holdout assignment all work end to end against real Postgres and Redis: variant selection
