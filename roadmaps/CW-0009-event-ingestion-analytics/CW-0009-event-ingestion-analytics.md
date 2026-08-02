@@ -166,7 +166,7 @@ closed set of reasons.
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — The event envelope, time-ordered identifiers, and the two-timestamp rule.
+- [x] Unit 1 — The event envelope, time-ordered identifiers, and the two-timestamp rule.
       The envelope (`internal/event/model`), the closed set of kinds, the impression-family field
       requirements, and storing both device time and server time are implemented and tested. Also
       built: a clock-offset sanity bound, `model.ClockSkewImplausible`, that flags rather than
@@ -178,7 +178,7 @@ closed set of reasons.
       one writer that was still bucketing by raw `device_time`, fixed here to the same receipt-time
       clamp the targeting and campaign rollups already used.
 
-      Also now built: the scheduled recomputation this unit calls for.
+      Also built: the scheduled recomputation this unit calls for.
       `internal/event/consumer/recompute_job.go` registers `RollupRecomputeWorker`, a `river.Worker`
       (CW-0010 Unit 8), as a periodic job that drains `events_log` into the rollups every minute,
       matching Unit 5's own "minute-level freshness" framing. The job does not re-scan a fixed
@@ -189,11 +189,27 @@ closed set of reasons.
       lateness, not only a chosen window of days: a late arrival lands in the day it belongs to.
       `recompute_job.go`'s own comment records this reasoning in full.
 
-      Still not built: estimating a device's typical clock offset and correcting for it — the "device
-      time corrected by the measured clock offset" half of this unit's design text, distinct from the
-      clamp above, which only bounds an implausible timestamp rather than adjusting a plausible one
-      for a device's steady skew. `model.EffectiveTime`'s doc comment states this explicitly as out of
-      scope for the change that added the clamp, and it remains open.
+      Now also built: `internal/event/clockoffset`, the last named piece — "device time corrected by
+      the measured clock offset," distinct from the clamp above, which only bounds an implausible
+      timestamp rather than adjusting a plausible one for a device's steady skew.
+      `clockoffset.Estimate` reads a channel's most recent `events_log` rows and returns the median of
+      (device time minus server time) across them. A median, not a mean, is the estimator on purpose:
+      one implausible outlier — the kind `model.ClockSkewImplausible`'s clamp exists to bound — cannot
+      swing a channel's whole correction that way. `clockoffset.Correct` composes that estimate with
+      the same receipt-time clamp, so a corrected time still can never land after server time. Rollup
+      bucketing stays receipt-time-based and untouched, per this unit's own rule; the correction is
+      for analysis-facing reads of device time, not for bucketing. Tested against both a synthetic
+      history and a real Postgres instance.
+
+      No existing read path currently needs the corrected time wired in, and that is a property of
+      this codebase's other consumers rather than a gap in `clockoffset` itself:
+      `internal/event/report` never surfaces raw device time — it reads pre-aggregated rollups
+      instead — and `internal/event/attribution` reads device time only for same-channel ordering and
+      window comparisons, where a per-channel constant offset cancels out, so a corrected timestamp
+      would attribute identically to today's raw one. `clockoffset` is checked into this box because
+      the correction the design calls for is real, tested, and ready for the first consumer that
+      genuinely needs a corrected device time rather than a receipt-time bucket or a same-channel
+      comparison — not because an existing report already uses it.
 - [x] Unit 2 — Cheap acceptance with per-channel rate limiting and rejection metrics.
       `internal/event/ingest` validates each event independently (one bad event does not sink the
       rest of its batch), enforces a per-channel fixed-window rate limit in Redis
