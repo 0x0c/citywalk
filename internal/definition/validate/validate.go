@@ -123,12 +123,16 @@ func validateVariantWeights(variants []model.Variant) error {
 	return errors.Join(errs...)
 }
 
-// validateSchemaVersion rejects a variant declaring a Major this build cannot itself serve — the
-// server must never persist a document its own delivery path cannot later emit.
+// validateSchemaVersion rejects a variant declaring a Major this build does not currently admit —
+// the server must never persist a document its own delivery path cannot later emit. During a
+// major-version transition, model.SupportedMajors names more than just model.CurrentMajor, so a
+// message can carry both the old Major's content and the new Major's content side by side, which is
+// what gives payload.Build's parallel-emission selection (SchemaVersion.SupportsMajor) something to
+// choose between (CW-0003 Unit 4).
 func validateSchemaVersion(v model.Variant) error {
-	if v.SchemaVersion.Major != model.CurrentMajor {
-		return fmt.Errorf("variant %s declares schema major %d, this build serves major %d",
-			v.ID, v.SchemaVersion.Major, model.CurrentMajor)
+	if !model.SupportsSchemaMajor(v.SchemaVersion.Major) {
+		return fmt.Errorf("variant %s declares schema major %d, this build supports %v",
+			v.ID, v.SchemaVersion.Major, model.SupportedMajors)
 	}
 	return nil
 }

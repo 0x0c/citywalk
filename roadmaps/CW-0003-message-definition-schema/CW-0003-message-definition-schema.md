@@ -150,16 +150,21 @@ the person who can fix it, while a rejection at delivery reaches a device and no
 - [x] Unit 1 — The five entities and the message-to-variant split.
 - [x] Unit 2 — Content as a tagged union over layouts, with actions as a nested union.
 - [x] Unit 3 — Relational columns for queried fields, one JSON document per variant for content.
-- [ ] Unit 4 — Schema versioning, additive-only minor changes, parallel emission across a major.
+- [x] Unit 4 — Schema versioning, additive-only minor changes, parallel emission across a major.
       Versioning, the compatibility check, and the mechanism parallel emission needs are now wired
-      end to end: a device declares its supported major at registration (CW-0010 Unit 9's Register),
-      and `payload.Build` reads it back and excludes any variant `SchemaVersion.SupportsMajor` rejects
-      before selection ever reaches language or experiment assignment — a device gets no entry for a
-      message with no compatible variant, the same as a channel that never qualified. Left unchecked
-      because there is still nothing to actually emit in parallel: save-time validation
-      (`validateSchemaVersion`) admits only `model.CurrentMajor`, so a second major's content can
-      never be persisted yet, and parallel emission is a mechanism proven against one major rather
-      than a live behavior across two.
+      end to end, and save-time validation now admits more than one major. `validateSchemaVersion`
+      checks a variant's declared major against `model.SupportedMajors`
+      (`internal/definition/model/schema_version.go`), a small explicit set holding
+      `model.CurrentMajor` alone until a migration begins, at which point it names the next major too.
+      That widening is what lets a message persist both majors' content side by side, so
+      `payload.Build`'s exclusion logic has two majors to choose between instead of one. A device
+      declares its supported major at registration (CW-0010 Unit 9's Register), and `payload.Build`
+      reads it back and excludes any variant `SchemaVersion.SupportsMajor` rejects before selection
+      ever reaches language or experiment assignment — a device gets no entry for a message with no
+      compatible variant, the same as a channel that never qualified. Widening `SupportedMajors`
+      leaves additive-only-within-a-minor untouched: an unknown `layout` or action kind is still a
+      decode rejection (`model.UnmarshalContent`, `model.UnmarshalAction`), whatever majors save-time
+      validation admits.
 - [ ] Unit 5 — Save-time validation covering shape, references, time, weights, and content security.
       Shape, temporal sanity, weights, content security, and audience referential integrity (a
       non-empty `audience_ref` must name a real row in `segments`) are implemented and tested.
