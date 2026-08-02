@@ -149,7 +149,9 @@ modulo on a negative hash.
 
 - [ ] Unit 1 — Identity selection and the display-time pin that survives a login.
       Identity selection is implemented, tested, and now live on the delivery path:
-      `internal/delivery/payload.buildEntry` calls `assign.Assign` at payload assembly time (per
+      `internal/delivery/payload.applyOverlay` (via `assignVariant`, CW-0006 Unit 4's per-channel
+      overlay step — this function was `buildEntry` before that unit split payload assembly into a
+      shared bundle and a per-channel overlay) calls `assign.Assign` at payload assembly time (per
       language group, with a bucket allocation derived from CW-0003's validated variant weights) and
       the resulting variant_id is what a real impression now carries, aggregated by CW-0009 into
       `campaign_rollup` and read back by `internal/event/report.Variants`. Because this schema has no
@@ -162,13 +164,14 @@ modulo on a negative hash.
 - [x] Unit 3 — The explicit range table and a reweight that moves the fewest buckets.
 - [x] Unit 4 — Campaign holdouts as reserved ranges, and the project-wide control group.
       The reserved-range mechanism is also wired into the live delivery path now: a message's
-      `HoldoutFraction` reserves a real range in the range table `payload.buildEntry` builds, and a
-      channel landing there is excluded from its payload exactly like a channel that never qualified.
+      `HoldoutFraction` reserves a real range in the range table `payload.assignVariant` (called from
+      `applyOverlay`) builds, and a channel landing there is excluded from its payload exactly like a
+      channel that never qualified.
       `InProjectHoldout` (the separate, project-wide control group) has no caller yet — there is no
       project entity in this schema for it to scope against.
 - [x] Unit 5 — Holdout qualification events, and reporting from the recorded variant.
       Reporting from the recorded variant is done (see Unit 1's note). Holdout qualification events
-      are now wired into the same live delivery path. `internal/delivery/payload.buildEntry` calls
+      are now wired into the same live delivery path. `internal/delivery/payload.applyOverlay` calls
       `recordHoldoutQualified` whenever a channel lands in a message's own holdout.
       `recordHoldoutQualified` writes a `model.KindHoldoutQualified` event through
       `internal/event/ingest.Record`. That is the same server-emits-an-event-as-a-side-effect pattern

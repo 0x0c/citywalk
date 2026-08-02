@@ -132,7 +132,9 @@
 
 - [ ] ユニット1：識別子の選択と、ログインをまたいで残る表示時の固定。
       識別子の選択は実装・試験済みで、いまは配信経路で実際に動いています。
-      `internal/delivery/payload.buildEntry` が、ペイロード組み立ての時点で言語グループごとに
+      `internal/delivery/payload.applyOverlay`（`assignVariant` 経由。CW-0006 ユニット4がペイロード
+      組み立てを共有バンドルとチャネルごとの上乗せへ分割する前は、この関数は `buildEntry` という名前
+      でした）が、ペイロード組み立ての時点で言語グループごとに
       `assign.Assign` を呼び（バケットの配分は CW-0003 が検証済みのバリアント比率から導きます）、
       その結果の variant_id を実際の表示が持つようになりました。CW-0009 がそれを campaign_rollup へ
       集計し、internal/event/report.Variants が読み戻します。このスキーマにはまだユーザーアカウントの
@@ -144,13 +146,14 @@
 - [x] ユニット3：明示的な範囲表と、動かすバケットを最小にする比率の変更。
 - [x] ユニット4：予約範囲としての施策のホールドアウトと、プロジェクト全体の対照群。
       予約範囲の仕組みも、いまは配信経路で実際に動いています。メッセージの HoldoutFraction が、
-      `payload.buildEntry` が組み立てる範囲表の中に実際の範囲を予約し、そこへ落ちたチャネルは、
+      `payload.assignVariant`（`applyOverlay` から呼ばれます）が組み立てる範囲表の中に実際の範囲を
+      予約し、そこへ落ちたチャネルは、
       一度も対象にならなかったチャネルと同じようにペイロードから除外されます。InProjectHoldout
       （別立てのプロジェクト全体の対照群）を呼ぶ箇所はまだありません。このスキーマには、それが
       対象とすべきプロジェクトという実体がまだ存在しません。
 - [x] ユニット5：ホールドアウト該当のイベントと、記録されたバリアントにもとづくレポート。
       記録されたバリアントにもとづくレポートはできています（ユニット1の注記のとおり）。ホールドアウト
-      該当のイベントも、いまは同じ配信経路で実際に動いています。`internal/delivery/payload.buildEntry`
+      該当のイベントも、いまは同じ配信経路で実際に動いています。`internal/delivery/payload.applyOverlay`
       は、チャネルがメッセージのホールドアウトへ落ちると `recordHoldoutQualified` を呼びます。
       `recordHoldoutQualified` は `internal/event/ingest.Record` を通じて
       `model.KindHoldoutQualified` イベントを書き込みます。CW-0007 の `project_budget` 抑止のために
