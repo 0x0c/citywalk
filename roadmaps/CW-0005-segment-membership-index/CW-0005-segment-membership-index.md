@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0005](CW-0005-segment-membership-index.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **In progress** |
+| Status | **Implemented** |
 | Topic | Targeting |
 | Related | [CW-0004](../CW-0004-audience-predicate-engine/CW-0004-audience-predicate-engine.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md) |
 <!-- /CW-METADATA -->
@@ -161,10 +161,25 @@ other signal — a stale membership serves a payload that looks entirely normal.
 - [x] Unit 3 — Reverse index as a per-channel segment bitmap in the in-memory store.
 - [x] Unit 4 — Batch recomputation with generation numbering and an atomic pointer swap.
 - [x] Unit 5 — Incremental maintenance driven by an attribute-to-segment dependency map.
-- [ ] Unit 6 — Scheduled reconciliation reporting the disagreement count as a health metric.
-      The comparison and disagreement-count reporting run as part of every recomputation and are
-      tested; nothing runs it on a schedule yet, since the job queue that would trigger it
-      (CW-0010 Unit 8) doesn't exist.
+- [x] Unit 6 — Scheduled reconciliation reporting the disagreement count as a health metric.
+      `internal/membership/batch/reconcile_job.go` registers `ReconcileWorker`, a `river.Worker`
+      (CW-0010 Unit 8) that calls `Recompute`, as a periodic job that runs once per hour — frequent
+      enough to catch a dependency-map gap or a dropped event within the hour, and infrequent enough
+      that the cost, reading every segment from PostgreSQL and rewriting both indexes, scales with
+      segment count rather than request volume, matching this unit's own framing of the disagreement
+      count as a health metric to notice drifting rather than a tight correctness guarantee.
+      `Recompute` (`batch.go`) now also records the disagreement count as CW-0010 Unit 10's named
+      membership-reconciliation-disagreement-count OpenTelemetry gauge, per segment, on every
+      recomputation. That is the piece "reporting ... as a health metric" needed beyond returning
+      the count in a `Report` struct visible to nothing but the caller. `cmd/server/main.go` wires
+      the worker with a placeholder attribute registry (`registry.New()` with no definitions), since
+      CW-0004 has no production registry construction yet, and no administrative endpoint creates a
+      segment either — a fresh deployment reconciles zero segments regardless of what the registry
+      contains, which is outside this unit's own scope to fix. Tested by
+      `reconcile_job_test.go` (unit: job kind, worker registration, schedule interval) and
+      `reconcile_job_integration_test.go` (integration, tagged, against real PostgreSQL and Redis:
+      `ReconcileWorker.Work` advances the generation pointer and updates the forward index for a real
+      segment).
 
 ## References
 

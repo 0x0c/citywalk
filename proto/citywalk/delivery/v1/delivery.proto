@@ -29,6 +29,11 @@ message SyncRequest {
   string language = 2;
   // etag is the tag the device's current payload was served with, empty on first synchronization.
   string etag = 3;
+  // cursor is CW-0006 Unit 3's delta-sync cursor: the version cursor the device last received,
+  // empty when it has none (first synchronization, or delta mode not yet in use). Ignored entirely
+  // when delta mode is off for this project — the response is always the full payload in that case.
+  // Plain string, the same convention etag above uses: empty unambiguously means "none".
+  string cursor = 4;
 }
 
 // Entry is the wire projection of internal/delivery/payload.Entry. Trigger, DisplayCondition, and
@@ -61,6 +66,18 @@ message SyncResponse {
   // impression budget as of this assembly. Absent (not just zero) when no budget is configured for
   // this synchronization — proto3 `optional` carries that distinction across the wire.
   optional int32 project_budget_remaining = 5;
+  // is_delta is CW-0006 Unit 3: true when entries carries only what changed since the request's
+  // cursor rather than the complete payload. False — including every response from a project with
+  // delta mode off, or any device that never sends a cursor — preserves today's full-replace
+  // semantics: entries is the complete eligible set and tombstoned_message_ids is always empty.
+  bool is_delta = 6;
+  // tombstoned_message_ids lists message identifiers the device should remove locally. Only
+  // meaningful when is_delta is true.
+  repeated string tombstoned_message_ids = 7;
+  // cursor is the fresh version cursor the device should store and echo on its next
+  // synchronization. Empty whenever delta mode is off for this project, or on the unchanged path —
+  // nothing changed, so the device's existing cursor is still current.
+  string cursor = 8;
 }
 
 message ConfirmRequest {

@@ -9,3 +9,6 @@ __pycache__/
 
 # Coverage profile written by `make test-unit`.
 /coverage.out
+
+# Scratch worktrees the agent harness creates for background subagents.
+/.claude/worktrees/

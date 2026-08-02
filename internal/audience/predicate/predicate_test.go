@@ -7,6 +7,7 @@ import (
 	"github.com/0x0c/citywalk/internal/audience/audiencetest"
 	"github.com/0x0c/citywalk/internal/audience/eval"
 	"github.com/0x0c/citywalk/internal/audience/predicate"
+	"github.com/0x0c/citywalk/internal/audience/registry"
 )
 
 func TestCompileAndLoadRoundTrip(t *testing.T) {
@@ -97,6 +98,54 @@ func TestCompileAcceptsWrappedSemVerComparison(t *testing.T) {
 
 	if _, err := predicate.Compile(env, reg, `semver(app_version) >= semver("2.10.0")`); err != nil {
 		t.Fatalf("Compile: %v, want nil", err)
+	}
+}
+
+// TestCompileAcceptsADayGranularityAggregateCondition proves CW-0004 Unit 5's granularity check is a
+// no-op against the registry as it exists today: route_screen_views_7d is registered at
+// AggregateGranularityDay, and its window is a whole number of days, so it carries exactly the
+// day-level precision every windowed condition requests.
+func TestCompileAcceptsADayGranularityAggregateCondition(t *testing.T) {
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+
+	if _, err := predicate.Compile(env, reg, `route_screen_views_7d >= 3.0`); err != nil {
+		t.Fatalf("Compile: %v, want nil", err)
+	}
+}
+
+// TestCompileRejectsAnAggregateConditionCoarserThanRequestedGranularity is CW-0004 Unit 5's
+// type-checker rejection, exercised end to end: "week" does not exist as a production granularity —
+// AggregateGranularityDay is the only one a real Definition uses today — but registry.GranularityCarries
+// already orders it correctly, so a Definition registered against it (constructed only here, never in
+// production code) stands in for the "second, finer granularity" the roadmap note describes, and
+// demonstrates the condition's fixed day-level request exceeding it is rejected rather than silently
+// compiled.
+func TestCompileRejectsAnAggregateConditionCoarserThanRequestedGranularity(t *testing.T) {
+	reg, err := registry.New(
+		registry.Definition{
+			Name: "route_screen_views_weekly", Type: registry.TypeNumber, Source: registry.SourceEventAggregate,
+			AggregateGranularity: "week",
+			AggregateEventName:   "route_screen_view", AggregateWindowDays: 7,
+		},
+	)
+	if err != nil {
+		t.Fatalf("registry.New: %v", err)
+	}
+	env, err := predicate.BuildEnv(reg)
+	if err != nil {
+		t.Fatalf("BuildEnv: %v", err)
+	}
+
+	_, err = predicate.Compile(env, reg, `route_screen_views_weekly >= 3.0`)
+	if err == nil {
+		t.Fatal("Compile: got nil error for a condition against a week-granularity aggregate, want a rejection")
+	}
+	if !strings.Contains(err.Error(), "granularity") {
+		t.Errorf("Compile error = %q, want it to name the granularity mismatch", err)
 	}
 }
 

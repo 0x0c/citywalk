@@ -171,12 +171,12 @@ split, which is why it is a separate item rather than a paragraph here.
       is archived rather than deleted (`MessageStateArchived`, reachable through UpdateMessageState),
       matching the "publish a new version instead of mutating one" rule this unit's own design states
       — there is no endpoint to edit a draft's content in place once created.
-- [ ] Unit 2 — Audience service: predicate evaluation and segment membership.
+- [x] Unit 2 — Audience service: predicate evaluation and segment membership.
       CW-0004's predicate language and evaluator and CW-0005's membership index are both implemented
       and tested; a channel's eligible set resolves end to end through the reverse index CW-0002's
-      payload assembly reads. Left unchecked because neither CW-0004 nor CW-0005 itself is marked
-      Implemented yet (each still carries its own open sub-items) — this box mirrors theirs rather
-      than reaching a more finished-sounding state on its own account.
+      payload assembly reads. Checked now that both CW-0004 and CW-0005 are themselves marked
+      Implemented — this box has always mirrored theirs rather than reaching a more finished-sounding
+      state on its own account.
 - [ ] Unit 3 — Delivery service: payload assembly, variant selection, synchronization.
       CW-0002's payload assembly, CW-0006's delta synchronization protocol, and CW-0008's experiment
       and holdout assignment all work end to end against real Postgres and Redis: variant selection
@@ -185,11 +185,14 @@ split, which is why it is a separate item rather than a paragraph here.
       CW-0008 itself still has open units (the display-time pin and holdout-qualification telemetry
       are permanently or currently out of reach — see its own progress notes), so this box mirrors
       that rather than reaching a more finished-sounding state on its own account.
-- [ ] Unit 4 — Ingestion service: event acceptance, deduplication, and publication.
+- [x] Unit 4 — Ingestion service: event acceptance, deduplication, and publication.
       CW-0009's acceptance, per-channel rate limiting, identifier-based deduplication, and rollup
-      consumption are implemented and tested. "Publishes them onto a stream" is phase-one Postgres
-      (documented in `migrations/0006_events.sql`), not a real stream a second consumer could scale
-      across independently — CW-0009's own Unit 3 note covers this in detail.
+      consumption are implemented and tested. "Publishes them onto a stream" has two paths now: the
+      active default is phase-one Postgres (`migrations/0006_events.sql`), and a real Kafka-compatible
+      stream a second consumer can scale across independently exists behind CW-0010 Unit 5's config
+      flag — CW-0009's own Unit 3 note covers both in detail. Checked now that CW-0009 is itself marked
+      Implemented — this box has always mirrored its state rather than reaching a more finished-sounding
+      state on its own account.
 - [ ] Unit 5 — Governance: device-side caps and priority, server-side project caps and confirmation.
       The server-side half — CW-0007's project-wide budget, its atomic strict-confirmation decrement,
       and suppression telemetry — is implemented and tested. The device-side half (per-message caps,

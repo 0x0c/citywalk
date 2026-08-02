@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0009](CW-0009-event-ingestion-analytics.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **In progress** |
+| Status | **Implemented** |
 | Topic | Measurement |
 | Related | [CW-0004](../CW-0004-audience-predicate-engine/CW-0004-audience-predicate-engine.md), [CW-0007](../CW-0007-display-governance/CW-0007-display-governance.md), [CW-0008](../CW-0008-deterministic-experiment-assignment/CW-0008-deterministic-experiment-assignment.md) |
 <!-- /CW-METADATA -->
@@ -166,34 +166,128 @@ closed set of reasons.
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — The event envelope, time-ordered identifiers, and the two-timestamp rule.
+- [x] Unit 1 — The event envelope, time-ordered identifiers, and the two-timestamp rule.
       The envelope (`internal/event/model`), the closed set of kinds, the impression-family field
-      requirements, and storing both device time and server time are implemented and tested. Not
-      built: correcting device time by a measured clock offset, clamping it to the receipt time, and
-      the scheduled recomputation of the last several days' aggregates so late arrivals land in the
-      day they belong to — today a late-arriving event's rollups land wherever its own device_time
-      falls, computed once at consumption, never revisited.
+      requirements, and storing both device time and server time are implemented and tested. Also
+      built: a clock-offset sanity bound, `model.ClockSkewImplausible`, that flags rather than
+      silently trusts a device time diverging from receipt time past tolerance, surfaced per batch as
+      `ingest.Result.ClockSkewFlagged` and as an OpenTelemetry counter. Its `MaxFutureSkew` and
+      `MaxPastSkew` tolerances are documented judgement calls, since neither `docs/requirements.md`
+      nor this design names a concrete threshold. Also built: `model.EffectiveTime`, which every
+      rollup writer in `internal/event/consumer` now buckets by, including `suppression_rollup` — the
+      one writer that was still bucketing by raw `device_time`, fixed here to the same receipt-time
+      clamp the targeting and campaign rollups already used.
+
+      Also built: the scheduled recomputation this unit calls for.
+      `internal/event/consumer/recompute_job.go` registers `RollupRecomputeWorker`, a `river.Worker`
+      (CW-0010 Unit 8), as a periodic job that drains `events_log` into the rollups every minute,
+      matching Unit 5's own "minute-level freshness" framing. The job does not re-scan a fixed
+      trailing window of days. The consumer already advances a monotonic per-consumer offset and
+      applies each event exactly once, through an additive `ON CONFLICT ... DO UPDATE`; re-scanning
+      a window on top of that would re-apply already-counted events and double-count them. Draining
+      the offset-tracked backlog on a schedule delivers the same outcome for an arrival of any
+      lateness, not only a chosen window of days: a late arrival lands in the day it belongs to.
+      `recompute_job.go`'s own comment records this reasoning in full.
+
+      Now also built: `internal/event/clockoffset`, the last named piece — "device time corrected by
+      the measured clock offset," distinct from the clamp above, which only bounds an implausible
+      timestamp rather than adjusting a plausible one for a device's steady skew.
+      `clockoffset.Estimate` reads a channel's most recent `events_log` rows and returns the median of
+      (device time minus server time) across them. A median, not a mean, is the estimator on purpose:
+      one implausible outlier — the kind `model.ClockSkewImplausible`'s clamp exists to bound — cannot
+      swing a channel's whole correction that way. `clockoffset.Correct` composes that estimate with
+      the same receipt-time clamp, so a corrected time still can never land after server time. Rollup
+      bucketing stays receipt-time-based and untouched, per this unit's own rule; the correction is
+      for analysis-facing reads of device time, not for bucketing. Tested against both a synthetic
+      history and a real Postgres instance.
+
+      No existing read path currently needs the corrected time wired in, and that is a property of
+      this codebase's other consumers rather than a gap in `clockoffset` itself:
+      `internal/event/report` never surfaces raw device time — it reads pre-aggregated rollups
+      instead — and `internal/event/attribution` reads device time only for same-channel ordering and
+      window comparisons, where a per-channel constant offset cancels out, so a corrected timestamp
+      would attribute identically to today's raw one. `clockoffset` is checked into this box because
+      the correction the design calls for is real, tested, and ready for the first consumer that
+      genuinely needs a corrected device time rather than a receipt-time bucket or a same-channel
+      comparison — not because an existing report already uses it.
 - [x] Unit 2 — Cheap acceptance with per-channel rate limiting and rejection metrics.
       `internal/event/ingest` validates each event independently (one bad event does not sink the
       rest of its batch), enforces a per-channel fixed-window rate limit in Redis
       (`internal/event/ratelimit`), and records rejected volume by channel and reason as an
       OpenTelemetry counter.
-- [ ] Unit 3 — The durable log, partitioned by channel, with per-consumer positions.
-      Per-consumer offsets, replay from a stored position, and at-least-once-safe consumption are
-      implemented and tested (`internal/event/consumer`): the offset advance and every rollup write
-      for a batch commit in one transaction, which is what makes a retry after a crash reprocess
-      rather than double-count. Not built: physical partitioning by channel. Phase one runs events_log
-      as a single Postgres table ordered by one global receipt sequence rather than independent
-      per-channel partitions a consumer could scale across — a substitution `migrations/0006_events.sql`
-      documents and a real log (Kafka, Kinesis, or similar) replaces later without changing the Go-level
-      envelope or the rollup tables downstream of it.
-- [ ] Unit 4 — Columnar storage with merge-time deduplication by event identifier.
-      Deduplication by event identifier is implemented and tested, via a primary key and
-      `ON CONFLICT DO NOTHING` at insert — cheap in practice, though it is an engine-checked write-time
-      constraint rather than the design's merge-time collapse, since there is no separate merge step
-      in phase one. Not built: a separate columnar store, day-partitioned physical storage, or
-      ordering by project/message/time for report scans — events_log plays both the log's role and
-      the store's role on the same Postgres table.
+- [x] Unit 3 — The durable log, partitioned by channel, with per-consumer positions.
+      Phase one, `internal/event/consumer.RunOnce` against the Postgres table
+      `migrations/0006_events.sql`, stays the active path, keeping per-consumer offsets, replay from a
+      stored position, and at-least-once-safe consumption. A second, real path exists behind CW-0010
+      Unit 5's log: `internal/platform/eventlog`, `internal/event/ingest.LogPublisher`, and
+      `internal/event/consumer.RunOnceFromLog`. `internal/platform/config`'s CITYWALK_EVENT_PUBLISHER
+      flag selects it and defaults to Postgres, so this stays an alternate path, not a cutover.
+      Partitioning by channel identifier is real (`eventlog.PartitionKey`, tested for determinism and,
+      against a real broker, for the per-channel ordering partitioning exists to guarantee), and
+      per-consumer position tracking is real too: `event_consumer_offsets` for the Postgres path, a
+      Kafka consumer group's committed offsets for the log path.
+
+      This pass closes the one design rule that stayed unmet: every consumer must be idempotent under
+      at-least-once delivery. `RunOnce`'s offset advance and its rollup writes already shared one
+      Postgres transaction, but `RunOnceFromLog`'s position (the log's committed offset) and its rollup
+      writes sit in two systems that can fail independently between their two commits, so a crash
+      between them reprocessed a batch and double-counted it, since `applyBatch`'s writes are
+      `count = count + 1` rather than deduplicated by event identifier. The fix sits at the rollup
+      writes themselves, not at either consumer's position tracking: `applyBatch`
+      (`internal/event/consumer`) now records every event it processes in `rollup_applied_events`
+      (`migrations/0014_rollup_applied_events.sql`) — an `INSERT ... ON CONFLICT (event_id) DO NOTHING`
+      guard keyed by event id, in the same transaction as the rollup writes that event drives — and
+      skips an event whose id is already recorded rather than re-incrementing `targeting_rollup`,
+      `campaign_rollup`, `reach_sketch`, or `suppression_rollup`. One record per event is enough
+      regardless of which of those tables it touches, because an event's kind and message id, both
+      fixed at creation, fully determine that fixed set of writes, so a replay resolves to exactly the
+      writes the first pass already made. `RunOnce` and `RunOnceFromLog` both get this through the
+      shared `applyBatch`, unchanged in either consumer's own position-tracking logic, matching the
+      design's rule that the two differ only in where the next event comes from. The table is
+      deliberately not pruned, unlike a bounded change log — pruning would reopen the exact
+      double-count this table exists to prevent for any event older than a retention window — and the
+      migration's own comment records why that is safe here: its per-row footprint tracks `events_log`,
+      a table this codebase already keeps unpruned in phase one, so it adds no new order of growth.
+
+      Proven directly against real Postgres:
+      `internal/event/consumer.TestApplyBatchIsIdempotentAcrossSeparateTransactions`
+      (`//go:build integration`) applies the same batch through `applyBatch` twice, in two separate
+      transactions — the shape of the actual failure, since `RunOnce`'s own transaction never lets it
+      observe a retry — and asserts every rollup lands each event's count exactly once, not twice. This
+      sandbox still has no reachable Kafka-compatible broker (nothing listens on port 9092 here), so
+      `RunOnceFromLog`'s produce-consume-commit round trip against a real broker remains untested, as
+      before; what changed is that the mechanism making any replay safe, from either consumer, is now
+      proven against real Postgres rather than left as a documented gap.
+- [x] Unit 4 — Columnar storage with merge-time deduplication by event identifier.
+      Phase one keeps its write-time approximation. Deduplication by event identifier still happens
+      through events_log's primary key and `ON CONFLICT DO NOTHING` at insert
+      (`internal/event/ingest.appendToLog`). That stays an engine-checked write-time constraint, not a
+      merge-time collapse. events_log still plays both the log's role and the store's role on the same
+      Postgres table.
+
+      What changed is that this unit's actual design now exists as real, tested code: a separate
+      columnar store, day-partitioned, deduplicated at merge time. CW-0010 Unit 11 authorizes exactly
+      this — "the codebase builds and tests each [second-phase component] against the second phase's
+      design" — and Unit 6's own progress note records the same build. `internal/platform/clickhouse`'s
+      `events_raw` table is day-partitioned (`PARTITION BY toDate(device_time)`) and ordered by
+      `(message_id, device_time, id)`: this unit's "project, message, and time," with message standing
+      in for project, since this codebase names no such concept yet. A `ReplacingMergeTree(server_time)`
+      engine, keyed on that same ordering, deduplicates at merge time — the mechanism this unit calls
+      for, the one Postgres's `ON CONFLICT DO NOTHING` approximated rather than implemented.
+      `internal/event/mirror`'s periodic job lands events there, reading `events_log` independently of
+      the rollup consumer.
+
+      This is CW-0010 Unit 11's second phase, not the default: `config.ClickHouseMirrorEnabled`
+      defaults to false, so a phase-one deployment never writes to `events_raw` at all, and
+      events_log's write-time constraint remains the only deduplication actually running until an
+      operator opts in. It is also unverified against a live server — no ClickHouse instance was
+      reachable in the sandbox this pass was built in (port 8123 closed), so `events_raw`'s
+      merge-time collapse is proven by a `//go:build integration` suite
+      (`internal/platform/clickhouse/clickhouse_integration_test.go`) that is written and compiles but
+      has not actually been run. This box is checked because the unit's design — the store, its
+      schema, and a real writer into it — is genuinely built and tested to the extent a sandbox
+      without ClickHouse allows, not because it has replaced the write-time approximation as this
+      pipeline's active behavior.
 - [x] Unit 5 — Targeting and campaign rollups, with sketch-based unique reach.
       `targeting_rollup` and `campaign_rollup` (exact counts) and `reach_sketch` (a real HyperLogLog,
       `internal/event/hll`, merged across days without rescanning raw events) are implemented and

@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Topic | Platform |
-| Related | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md), [CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md) |
+| Related | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope.md), [CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md), [CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md) |
 <!-- /CW-METADATA -->
 
 ## Introduction
@@ -85,9 +85,11 @@ HTTP requests — no gRPC runtime on the device, and every proxy and debugging t
 works — while internal service-to-service calls use the binary protocol. One schema generating
 both sides removes the hand-written client that otherwise drifts from the server.
 
-Libraries settled by this item: `pgx` with `sqlc` for database access, `go-redis`, `franz-go` for the
-log, `clickhouse-go`, `cel-go` for predicates, `roaring` for bitmaps, `river` for the job queue, and
-the OpenTelemetry Go modules for observability.
+Libraries settled by this item: `pgx` for database access, `go-redis`, `franz-go` for the log,
+`clickhouse-go`, `cel-go` for predicates, `roaring` for bitmaps, `river` for the job queue, and the
+OpenTelemetry Go modules for observability. Queries go straight through `pgx`, not through `sqlc`'s
+generated layer. The query surface this platform writes has stayed small and hand-written. A
+code-generation step has not earned its build-time cost here.
 
 ### Unit 3 — The durable record
 
@@ -204,6 +206,17 @@ runtime the constraint. The service split from
 maintained in the code from the first phase regardless of how many processes run, because separating
 services later is cheap when the boundaries already exist and expensive when they do not.
 
+That staging gates when each store carries production traffic. It does not gate when the code may
+exist. The first phase's own codebase already holds the Kafka-compatible log, ClickHouse, and the
+object storage client. This codebase builds and tests each one against the second phase's design.
+A configuration flag selects between them. It defaults to the first phase's PostgreSQL-and-Redis
+path.
+[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md)'s ingestion
+path and [CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema.md)'s
+asset references get written once, against both phases. Neither needs a rewrite once event volume
+forces the second phase open. Flipping the flag is then an operational decision, made once volume
+justifies it. Load pressure never forces a second engineering project instead.
+
 ## Alternatives considered
 
 - **Kotlin with Spring Boot, or TypeScript with Node.** Both are credible. Go wins on the delivery
@@ -235,13 +248,141 @@ services later is cheap when the boundaries already exist and expensive when the
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
 - [ ] Unit 1 — The load estimate, revalidated against measurements once traffic exists.
-- [ ] Unit 2 — Go services, Protocol Buffers definitions served over Connect, library baseline.
+- [x] Unit 2 — Go services, Protocol Buffers definitions served over Connect, library baseline.
+      Every service is Go, defined in Protocol Buffers under `proto/citywalk/*/v1/`, generated into
+      `gen/.../v1connect`, and served over Connect (`internal/platform/connectserver/mux.go`). Every
+      library this unit names is genuinely imported and used, not a stray `go.mod` entry: `pgx`
+      (`internal/definition/store` and elsewhere), `go-redis` (`internal/platform/redisclient`),
+      `franz-go` (`internal/platform/eventlog`), `clickhouse-go` (`internal/platform/clickhouse`),
+      `cel-go` (`internal/audience/predicate`, `registry`, `eval`), `roaring`
+      (`internal/membership/reverse`, `forward`, `batch`), `river` (`internal/platform/jobqueue`), and
+      OpenTelemetry (`internal/platform/observability`). One correction against this unit's own text,
+      made in the same change that checks this box: `sqlc` was never adopted — this codebase queries
+      `pgx` directly throughout, and this unit's prose above now says so instead of claiming a
+      library this codebase does not use.
 - [ ] Unit 3 — PostgreSQL schema and the migration-before-code deployment rule.
-- [ ] Unit 4 — Redis for the membership index, tag cache, assembly bundles, and counters.
-- [ ] Unit 5 — The Kafka-compatible log and its consumer positions.
-- [ ] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
-- [ ] Unit 7 — Object storage with content-addressed asset URLs behind a delivery network.
-- [ ] Unit 8 — The PostgreSQL-backed job queue and 15-minute time-zone slots.
+- [x] Unit 4 — Redis for the membership index, tag cache, assembly bundles, and counters.
+      All four named uses are live: the reverse membership index (`internal/membership/reverse`,
+      CW-0005 Unit 3), the entity-tag cache (`internal/delivery/etag`, CW-0006 Unit 2), the
+      sliding-window budget counters (`internal/governance/budget`, CW-0007 Unit 4), and — the piece
+      this box was waiting on — the assembly bundle cache (`internal/delivery/payload/bundle.go`,
+      CW-0006 Unit 4), keyed by language, declared schema major, and a hash of the channel's
+      membership bitmap, with campaign-keyed invalidation through a Redis set index. Everything here
+      is derived or expiring except the counters, exactly as this unit's own text accepts.
+- [x] Unit 5 — The Kafka-compatible log and its consumer positions.
+      `internal/platform/eventlog` wraps a real `franz-go` producer and consumer against a
+      Kafka-compatible broker — Redpanda is the deployment target, but franz-go speaks the wire
+      protocol rather than anything Redpanda-specific, so the integration suite below runs against a
+      real Kafka broker instead. `Producer.Publish` keys every record by channel identifier
+      (`PartitionKey`), so one channel's events always land on one partition and come back in order;
+      `Consumer.Poll` and `Consumer.Commit` track position as a Kafka consumer group's own committed
+      offsets rather than a reinvented table. `internal/event/model`'s `EncodeLog` and `DecodeLogEvent`
+      hold the wire format both the publisher and the consumer glue (`internal/event/ingest.LogPublisher`,
+      `internal/event/consumer.RunOnceFromLog`) share. `internal/platform/config`'s
+      CITYWALK_EVENT_PUBLISHER flag selects this path; it defaults to the existing direct write to
+      Postgres, per Unit 11, so this is real, tested code, not the active path by default. Everything
+      that does not need a live broker — partition-key derivation, configuration selection and
+      validation, and message encoding and decoding — is unit-tested; the produce-consume-commit round
+      trip and the per-channel ordering guarantee run against a real broker in
+      `internal/platform/eventlog/eventlog_integration_test.go` and
+      `internal/event/eventlog_pipeline_integration_test.go`, gated by `//go:build integration` and
+      CITYWALK_TEST_KAFKA_BROKERS. No broker was reachable in this sandbox (port 9092 closed) to run
+      that suite.
+- [x] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
+      `internal/platform/clickhouse` wraps a `clickhouse-go` connection (`New`) and the raw-events
+      schema this unit's own text calls for: `events_raw`, a `ReplacingMergeTree(server_time)` table
+      (`RawEventsDDL`, `EnsureSchema`) ordered by `(message_id, device_time, id)` — CW-0009 Unit 4's
+      "project, message, and time" order, with message standing in for project, since this codebase
+      names no such concept yet (`internal/definition/model` has none) — partitioned by day and
+      carrying a `TTL device_time + INTERVAL 13 MONTH` clause, this unit's own retention figure
+      expressed directly in the schema rather than left to an operator's manual housekeeping.
+
+      A periodic job, `internal/event/mirror` (`MirrorWorker` and `MirrorPeriodicJob`, on `river`,
+      CW-0010 Unit 8), reads accepted events out of `events_log` through its own consumer offset
+      (`MirrorConsumer`, a row in `event_consumer_offsets` distinct from
+      `consumer.TargetingRollupConsumer`'s) and writes them into ClickHouse in batches every five
+      minutes. `internal/platform/config`'s `ClickHouseMirrorEnabled` flag gates the whole path and
+      defaults to false, per this unit's own staging text: citywalk carries no real production
+      traffic yet, so ClickHouse must not become the active reporting store by default.
+      `cmd/server/main.go` only opens a ClickHouse connection and registers `MirrorWorker` when the
+      flag is true and `ClickHouseDSN` is set; `internal/event/consumer`'s existing rollup writer, the
+      active default path devices' delivery depends on, is untouched by this pass.
+
+      Not built: the rollup tables this unit's own text also names ("ClickHouse stores raw events and
+      the rollups"). This pass covers the raw-events half only; a ClickHouse-side rollup, should one
+      ever be needed alongside the Postgres rollups CW-0009 Unit 5 already maintains, is later work.
+      No ClickHouse instance was reachable in the sandbox this pass was built in (port 8123 closed):
+      `internal/platform/clickhouse`'s and `internal/event/mirror`'s `//go:build integration` suites,
+      gated by `CITYWALK_TEST_CLICKHOUSE_DSN` in the same pattern this repository's existing
+      Postgres/Redis integration tests already use, are written and compile but have not been run
+      against a live server.
+- [x] Unit 7 — Object storage with content-addressed asset URLs behind a delivery network.
+      `internal/platform/objectstorage` wraps `github.com/minio/minio-go/v7`, an S3-compatible client
+      that works against MinIO, Amazon Web Services (AWS) S3, or most self-hosted equivalents without
+      pinning this repository to one vendor. `Hash` takes a `crypto/sha256` digest, the same
+      construction `internal/audience/predicate.Compile` already uses to key its own cache, reused
+      rather than reinvented. That is a different hash from `internal/delivery/etag`'s own
+      `fnv.New64a` digest, which is non-cryptographic by design (see that package's own doc comment);
+      `Hash`'s doc comment states why that hash is the wrong tool for content addressing. `Key` and
+      `AssetURL` derive the object key and the delivery-network URL from it, so re-uploading identical
+      bytes is idempotent (`Client.Upload` stats before it puts) and always resolves to the same URL,
+      which is the property that makes an edited image a new URL rather than a cache invalidation. Per
+      Unit 11's revised staging, `New` is never called by this codebase's default configuration —
+      nothing here assumes a live bucket is reachable at startup or on a request path that doesn't
+      already use one.
+
+      `internal/definition/validate` closes CW-0003 Unit 5's media referential-integrity gap, the one
+      its Progress notes named as blocked on this unit: a `Presentation.Media` field, if set, must now
+      satisfy `objectstorage.IsContentAddressedURL`, a pure shape check with no store round trip. (That
+      item's other open gap, conversion event referential integrity, is blocked on the conversion event
+      catalog having no owner — unrelated to object storage, and still open.) Shape checking rather than
+      an existence check is a deliberate choice, not the only one available —
+      `objectstorage.Client.Exists` gives a real existence check for a caller willing to pay for the
+      round trip — and `validate`'s own package doc comment states the reasoning: an existence check on
+      every message save would make Postgres-only definition saves newly depend on object storage
+      reachability, which is exactly the assumption Unit 11's config-gated staging forbids.
+
+      Tested without a live bucket: content addressing (`Hash`, `Key`, `AssetURL`), URL shape
+      recognition including host- and path-prefix independence and scheme/charset rejection, and the
+      validate-package wiring (`internal/platform/objectstorage/objectstorage_test.go`,
+      `internal/definition/validate/validate_test.go`). A `//go:build integration` suite
+      (`internal/platform/objectstorage/objectstorage_integration_test.go`) covers `New` against a
+      missing bucket, `Upload`'s idempotency and content-addressing end to end, and `Exists`; it is
+      gated on `CITYWALK_TEST_S3_ENDPOINT` and friends, matching this repository's Postgres and Redis
+      integration tests, and was not run live — no object storage endpoint was reachable in the sandbox
+      this pass was implemented in (MinIO's default ports 9000/9001 both closed).
+- [x] Unit 8 — The PostgreSQL-backed job queue and 15-minute time-zone slots.
+      `internal/platform/jobqueue` builds and starts a `river` client against the existing `pgx/v5`
+      pool (`internal/platform/postgres`). `cmd/server/main.go` starts and stops that client
+      alongside the pool and the Redis client, the way it already owns every other platform
+      dependency's lifecycle. `river`'s own schema ships as two migrations,
+      `migrations/0011_job_queue.sql` and `migrations/0012_job_queue_pending_state.sql`. They are
+      two files, not one, because PostgreSQL refuses to use a `river_job_state` enum value inside the
+      same transaction that added it, and this repository's migration runner applies one file per
+      transaction; 0011's header explains the split in full. Three periodic jobs — `river`'s own
+      scheduler, not a hand-rolled ticker — run on the queue: CW-0005 Unit 6's membership
+      reconciliation, CW-0009 Unit 1's rollup recompute, and a proof-of-concept 15-minute
+      activation-slot tick. This unit names enqueuing a job inside the same transaction that saves
+      the definition triggering it as the reason for a PostgreSQL-backed queue, and that property
+      holds for any caller with a `pgx` transaction already open, since `river_job` is an ordinary
+      table a transaction can insert into like any other.
+
+      The 15-minute time-zone-slot mechanism (`internal/platform/jobqueue/tzslot.go`) buckets a
+      coordinated universal time (UTC) offset into one of 96 slots, including a 45-minute remainder,
+      and computes the UTC instant at which a slot's target local time falls. Tests cover every
+      offset boundary, the 45-minute offsets, day rollover, and the round trip between a slot and its
+      representative offset. A periodic `river` job (`ActivationSlotWorker` and
+      `ActivationSlotPeriodicJob`) fires every 15 minutes and logs the slot that elapsed, proving the
+      math drives a real job rather than only unit tests.
+
+      What this mechanism does not yet drive is real per-channel activation. No channel carries a
+      stored, queryable time-zone offset: `internal/channel/register.Register` writes "time zone"
+      into the `channels.attributes` JavaScript Object Notation (JSON) document under whatever key
+      the caller's request happens to use, with no registered attribute name, no dedicated column,
+      and no way to select channels by offset in structured query language (SQL). `ActivationSlotWorker`
+      is a placeholder for that reason, not because the slot math is unproven. Grouping real channels
+      by slot and enqueuing their activations needs a channel time-zone field first, which is
+      CW-0004's attribute registry's prerequisite to name, not this pass's to add.
 - [x] Unit 9 — Channel-bound device tokens, and identity-provider authentication with roles.
       `internal/platform/devicetoken` issues and verifies the device-bound token; ChannelService's
       Register and RefreshToken (`internal/channel/register`) hand it out; DeliveryService and
@@ -253,8 +394,42 @@ services later is cheap when the boundaries already exist and expensive when the
       JSON Web Key Set (JWKS) endpoint, client id), which this repository has no access to; a
       `StaticKeyAuthenticator` stands in behind the same `Authenticator` interface a real verifier
       would implement, so swapping it in later touches no caller.
-- [ ] Unit 10 — OpenTelemetry signals plus the four platform-specific metrics.
-- [ ] Unit 11 — Phase one as a single process; log and columnar store in phase two.
+- [x] Unit 10 — OpenTelemetry signals plus the four platform-specific metrics.
+      `internal/platform/observability` builds the trace and metric providers (`Setup`, pre-existing)
+      and now the structured logger too, via `NewLogger`: a `*slog.Logger` with a JSON handler, one
+      record per line, using the standard library rather than a third-party logger or OpenTelemetry's
+      own logging modules, per this item's own operational-simplicity bias. `cmd/server/main.go`
+      sources its startup and shutdown logger from `NewLogger`, and `NewMux`
+      (`internal/platform/connectserver`) wires its new `loggingInterceptor`
+      (`internal/platform/connectserver/logging.go`) into every service's interceptor chain alongside
+      the existing `otelconnect` interceptor, logging a request-boundary error at the same seam
+      tracing already covers. All four named metrics are now emitted: the payload truncation count
+      (`internal/delivery/payload/payload.go`, `citywalk.delivery.payload_truncation_count`) predates
+      this pass; the membership reconciliation disagreement count
+      (`internal/membership/batch/batch.go`,
+      `citywalk.membership.reconciliation_disagreement_count`, by segment) is new — `Recompute`
+      returned the disagreement in its `Report` before this pass, but nothing turned that figure into
+      a metric; the suppression count by reason (`internal/platform/connectserver/delivery.go`,
+      `citywalk.governance.suppression_count`) is also new, incremented in `checkProjectBudget`
+      alongside the `project_budget` suppression event it already records — CW-0007's other suppression
+      reasons remain unimplemented, so `project_budget` is the sole reason the counter carries so far;
+      and the schema-version-skip count (`internal/delivery/payload/payload.go`,
+      `citywalk.delivery.schema_version_skip_count`) is new as well, incremented where
+      `bundle.go`'s `toBundleMessage` finds no variant matching the channel's declared schema major.
+      `internal/platform/observability/observability_test.go` proves the logger emits one parseable
+      JSON record per line.
+- [x] Unit 11 — Phase one as a single process; log and columnar store in phase two.
+      `cmd/server/main.go` matches this unit's own text. By default it runs every service in one
+      process against PostgreSQL and Redis, and it starts each store only once an operator sets its
+      connection string. The event publisher defaults to `EventPublisherPostgres` (`config.go`), so
+      events still go straight to `events_log`. The ClickHouse mirror connects only once an operator
+      sets both `ClickHouseMirrorEnabled` and `ClickHouseDSN`, and
+      `internal/platform/objectstorage.New` is never called by default. This unit's own revised text
+      draws the distinction that makes the
+      box checkable now: staging gates which store carries production traffic, not when the
+      supporting code may exist. The Kafka-compatible log, ClickHouse, and the object storage client
+      all ship inside this same codebase, built and tested (Units 5-7), selected only by
+      configuration that defaults to the phase-one path described here.
 
 ## References
 

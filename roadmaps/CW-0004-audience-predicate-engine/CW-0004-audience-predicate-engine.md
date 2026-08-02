@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0004](CW-0004-audience-predicate-engine.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **In progress** |
+| Status | **Implemented** |
 | Topic | Targeting |
 | Related | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md), [CW-0005](../CW-0005-segment-membership-index/CW-0005-segment-membership-index.md) |
 <!-- /CW-METADATA -->
@@ -161,18 +161,24 @@ second is the honest answer at small sample sizes.
 - [x] Unit 2 — Predicate storage as a serialized tree, with the source kept for display.
 - [x] Unit 3 — Row-wise evaluation with a compilation cache keyed by tree hash.
 - [x] Unit 4 — Tree-to-SQL compilation and the two-backend conformance suite.
-- [ ] Unit 5 — Event aggregate rollups and windowed conditions over daily buckets.
+- [x] Unit 5 — Event aggregate rollups and windowed conditions over daily buckets.
       Rollup maintenance (CW-0009's `targeting_rollup`, now that CW-0009 exists) and the windowed-sum
       evaluation are both implemented and tested against real Postgres, on both backends: `sqlcompile`
       compiles an event-aggregate attribute into a correlated subquery against `targeting_rollup`
       (`internal/audience/sqlcompile`), and `reach` merges the same sums into the row-wise evaluator's
       attribute map (`internal/audience/reach`) — verified end to end from real submitted events
-      through CW-0009's consumer to a `batch_only` segment's membership. Not implemented: the
-      type-checker rule rejecting a condition asking for finer precision than the rollup carries.
-      `AggregateGranularity` today only ever names `"day"`, and a definition's window is always a
-      whole number of days, so nothing in the predicate language can currently ask for anything finer
-      — this rejection becomes a real check only once a second, finer granularity exists for a
-      predicate to ask for by mistake.
+      through CW-0009's consumer to a `batch_only` segment's membership. The type-checker rule now
+      exists too. `predicate.validateAggregateGranularity`
+      (`internal/audience/predicate/predicate.go`) walks a condition's tree. For every event-aggregate
+      attribute it finds, it calls `registry.GranularityCarries`
+      (`internal/audience/registry/registry.go`), which compares the attribute's registered
+      granularity against the day-level precision every window requires (`AggregateWindowDays` is
+      always a whole number of days). A coarser granularity fails that comparison, and the check turns
+      down the condition. `AggregateGranularity` still names only `"day"` in production, so the rule
+      leaves every real `Definition` alone today. `registry_test.go` and `predicate_test.go` exercise
+      the comparison, and the end-to-end refusal, against synthetic, test-only "hour"/"week"
+      granularities — proof the comparison already works the day someone registers a second, finer or
+      coarser granularity for real.
 - [x] Unit 6 — Sampled reach estimation reporting a confidence interval.
 
 ## References

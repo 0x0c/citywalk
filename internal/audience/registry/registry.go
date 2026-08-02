@@ -5,6 +5,7 @@ package registry
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/cel-go/cel"
 )
@@ -37,6 +38,38 @@ const (
 type AggregateGranularity string
 
 const AggregateGranularityDay AggregateGranularity = "day"
+
+// aggregateGranularityBucket is the wall-clock span one rollup bucket covers, for every granularity
+// this package knows how to order. AggregateGranularityDay is the only value a real Definition can
+// use today; "hour" and "week" are recognized here, unexported and without constants of their own,
+// purely so GranularityCarries is a genuine ordering rather than a comparison special-cased to the
+// single value currently in production use — CW-0004 Unit 5's type-checker rejection has nothing to
+// compare against until a second granularity is registered, and this is what keeps the comparison
+// already correct on the day that happens, instead of needing to be rewritten.
+var aggregateGranularityBucket = map[AggregateGranularity]time.Duration{
+	"hour":                  time.Hour,
+	AggregateGranularityDay: 24 * time.Hour,
+	"week":                  7 * 24 * time.Hour,
+}
+
+// GranularityCarries reports whether an event-aggregate attribute registered at have's granularity
+// carries enough precision to answer a condition that requests want-level precision — true when
+// have's rollup bucket is no larger (no coarser) than want's. CW-0004 Unit 5: predicate.Compile calls
+// this to reject a condition asking for finer precision than an event-aggregate attribute's registered
+// granularity carries (e.g. an hour-level request against a day-level rollup). An unknown granularity
+// on either side is an error rather than a silent pass, matching this package's other validation: a
+// value this code cannot reason about is rejected, not accepted by default.
+func GranularityCarries(have, want AggregateGranularity) (bool, error) {
+	haveBucket, ok := aggregateGranularityBucket[have]
+	if !ok {
+		return false, fmt.Errorf("registry: unknown aggregate granularity %q", have)
+	}
+	wantBucket, ok := aggregateGranularityBucket[want]
+	if !ok {
+		return false, fmt.Errorf("registry: unknown aggregate granularity %q", want)
+	}
+	return haveBucket <= wantBucket, nil
+}
 
 // Definition describes one name a predicate may reference.
 type Definition struct {

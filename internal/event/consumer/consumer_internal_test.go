@@ -7,39 +7,35 @@ import (
 	"github.com/0x0c/citywalk/internal/event/model"
 )
 
-// TestEffectiveTimeReturnsDeviceTimeWhenNotAfterServerTime covers both the ordinary case (device time
-// strictly before server time — the vast majority of events, submitted online or with a small,
-// unremarkable delay) and the equal-timestamps edge case. Either endpoint is a defensible answer when
-// the two are equal; effectiveTime's "not after" comparison resolves the tie in device time's favor,
-// so this test asserts that specific choice rather than leaving it unstated.
-func TestEffectiveTimeReturnsDeviceTimeWhenNotAfterServerTime(t *testing.T) {
+// TestStoredEventBucketTimeDelegatesToModelEffectiveTime confirms the wiring every rollup writer in
+// this package relies on: storedEvent.bucketTime() is model.EffectiveTime of the event's own two
+// timestamps, not e.DeviceTime read directly. model's own tests cover EffectiveTime's clamp
+// thresholds in full; this only proves bucketTime actually calls it rather than reimplementing or
+// bypassing it.
+func TestStoredEventBucketTimeDelegatesToModelEffectiveTime(t *testing.T) {
 	serverTime := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
 
-	tests := map[string]time.Time{
-		"before server time": serverTime.Add(-time.Hour),
-		"equal server time":  serverTime,
+	tests := map[string]struct {
+		deviceTime time.Time
+		want       time.Time
+	}{
+		"ordinary device time before server time is used as-is": {
+			deviceTime: serverTime.Add(-time.Hour),
+			want:       serverTime.Add(-time.Hour),
+		},
+		"device time far into the future is clamped to server time": {
+			deviceTime: serverTime.Add(72 * time.Hour),
+			want:       serverTime,
+		},
 	}
 
-	for name, deviceTime := range tests {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := effectiveTime(deviceTime, serverTime)
-			if !got.Equal(deviceTime) {
-				t.Errorf("effectiveTime(%v, %v) = %v, want %v (device time)", deviceTime, serverTime, got, deviceTime)
+			e := storedEvent{DeviceTime: tt.deviceTime, ServerTime: serverTime}
+			if got := e.bucketTime(); !got.Equal(tt.want) {
+				t.Errorf("bucketTime() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-// TestEffectiveTimeClampsDeviceTimeAfterServerTimeToServerTime is Unit 1's clamp rule itself: a
-// device clock set into the future — by accident or by tampering — must never push a rollup bucket
-// past the day the server has actually reached.
-func TestEffectiveTimeClampsDeviceTimeAfterServerTimeToServerTime(t *testing.T) {
-	serverTime := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
-	deviceTime := serverTime.Add(72 * time.Hour)
-
-	got := effectiveTime(deviceTime, serverTime)
-	if !got.Equal(serverTime) {
-		t.Errorf("effectiveTime(%v, %v) = %v, want %v (clamped to server time)", deviceTime, serverTime, got, serverTime)
 	}
 }
 
@@ -68,23 +64,5 @@ func TestEventNameUsesTheSubmittedNameForACustomEvent(t *testing.T) {
 	e := storedEvent{Kind: model.KindCustom, Name: "route_screen_view"}
 	if got := e.eventName(); got != "route_screen_view" {
 		t.Errorf("eventName() = %q, want %q", got, "route_screen_view")
-	}
-}
-
-// TestBucketTimeCountsAnEventOnItsDeviceDayUnlessThatDayIsStillAhead ties the clamp to the thing it
-// actually protects — which day's bucket an event lands in. A device clock a week fast would
-// otherwise create rollup rows for days the server has not reached, which no report covering "the
-// last seven days" would ever surface again.
-func TestBucketTimeCountsAnEventOnItsDeviceDayUnlessThatDayIsStillAhead(t *testing.T) {
-	serverTime := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
-
-	offline := storedEvent{DeviceTime: serverTime.Add(-48 * time.Hour), ServerTime: serverTime}
-	if got := offline.bucketTime(); !got.Equal(offline.DeviceTime) {
-		t.Errorf("bucketTime() for a queued offline event = %v, want its device time %v", got, offline.DeviceTime)
-	}
-
-	fastClock := storedEvent{DeviceTime: serverTime.Add(168 * time.Hour), ServerTime: serverTime}
-	if got := fastClock.bucketTime(); !got.Equal(serverTime) {
-		t.Errorf("bucketTime() for a device clock a week fast = %v, want it clamped to %v", got, serverTime)
 	}
 }

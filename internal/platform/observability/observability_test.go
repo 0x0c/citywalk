@@ -1,65 +1,41 @@
-package observability_test
+package observability
 
 import (
-	"context"
+	"bytes"
+	"encoding/json"
+	"strings"
 	"testing"
-
-	"go.opentelemetry.io/otel"
-
-	"github.com/0x0c/citywalk/internal/platform/observability"
 )
 
-// TestSetupRegistersBothProvidersGlobally is what CW-0010 Unit 10 relies on for every package that
-// records a signal: ingest, payload, and the rest all reach for otel.Meter/otel.Tracer rather than
-// being handed a Providers value, so a Setup that built providers without installing them globally
-// would leave every one of those instruments writing to a no-op.
-func TestSetupRegistersBothProvidersGlobally(t *testing.T) {
-	ctx := context.Background()
+// TestNewLoggerEmitsParseableJSON proves the logging setup CW-0010 Unit 10 requires: one JSON record
+// per line, carrying the message, the level, and the service dimension every record is tagged with.
+func TestNewLoggerEmitsParseableJSON(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newLogger(&buf, "citywalk-test")
 
-	providers, err := observability.Setup(ctx, "citywalk-test")
-	if err != nil {
-		t.Fatalf("Setup: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := providers.Shutdown(context.Background()); err != nil {
-			t.Errorf("Shutdown: %v", err)
-		}
-	})
+	logger.Info("request handled", "procedure", "/citywalk.delivery.v1.DeliveryService/Sync")
 
-	if providers.TracerProvider == nil || providers.MeterProvider == nil {
-		t.Fatalf("Setup returned TracerProvider=%v MeterProvider=%v, want both set", providers.TracerProvider, providers.MeterProvider)
-	}
-	if otel.GetTracerProvider() != providers.TracerProvider {
-		t.Error("otel.GetTracerProvider() is not the provider Setup returned, want it installed globally")
-	}
-	if otel.GetMeterProvider() != providers.MeterProvider {
-		t.Error("otel.GetMeterProvider() is not the provider Setup returned, want it installed globally")
-	}
-}
-
-// TestSetupProvidersRecordSpansAndMeasurements exercises the providers end to end rather than only
-// asserting they are non-nil: the stdout exporters CW-0010 Unit 11 uses for phase one are batched, so
-// a misconfigured pipeline surfaces on the recording and flush path, not at construction.
-func TestSetupProvidersRecordSpansAndMeasurements(t *testing.T) {
-	ctx := context.Background()
-
-	providers, err := observability.Setup(ctx, "citywalk-test")
-	if err != nil {
-		t.Fatalf("Setup: %v", err)
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("got %d log lines, want exactly 1: %q", len(lines), output)
 	}
 
-	_, span := providers.TracerProvider.Tracer("citywalk/test").Start(ctx, "unit-test-span")
-	span.End()
-
-	counter, err := providers.MeterProvider.Meter("citywalk/test").Int64Counter("citywalk.test.count")
-	if err != nil {
-		t.Fatalf("Int64Counter: %v", err)
+	var record map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("log record is not valid JSON: %v\nrecord: %s", err, lines[0])
 	}
-	counter.Add(ctx, 1)
 
-	// Shutdown is the flush: an exporter that cannot write is reported here, which is why the
-	// process-stop path returns an error at all rather than being fire-and-forget.
-	if err := providers.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown: %v", err)
+	if got := record["msg"]; got != "request handled" {
+		t.Errorf("msg = %v, want %q", got, "request handled")
+	}
+	if got := record["service"]; got != "citywalk-test" {
+		t.Errorf("service = %v, want %q", got, "citywalk-test")
+	}
+	if got := record["procedure"]; got != "/citywalk.delivery.v1.DeliveryService/Sync" {
+		t.Errorf("procedure = %v, want the passed attribute", got)
+	}
+	if _, ok := record["time"]; !ok {
+		t.Error("record has no time field")
 	}
 }

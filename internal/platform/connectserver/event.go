@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	eventv1 "github.com/0x0c/citywalk/gen/citywalk/event/v1"
@@ -26,8 +25,10 @@ var defaultRateLimit = ratelimit.Limiter{Limit: 1000, Window: time.Minute}
 
 // EventServer implements eventv1connect.EventServiceHandler: Submit (CW-0009 Unit 2).
 type EventServer struct {
-	Pool  *pgxpool.Pool
-	Redis *redis.Client
+	// Publisher is where Submit's accepted events land (CW-0010 Unit 11's staged adoption). NewMux
+	// selects it from internal/platform/config's event publisher mode.
+	Publisher ingest.Publisher
+	Redis     *redis.Client
 }
 
 func (s EventServer) Submit(
@@ -59,7 +60,7 @@ func (s EventServer) Submit(
 
 	limiter := defaultRateLimit
 	limiter.Redis = s.Redis
-	result, err := ingest.Accept(ctx, s.Pool, limiter, channelID, events, time.Now())
+	result, err := ingest.Accept(ctx, s.Publisher, limiter, channelID, events, time.Now())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

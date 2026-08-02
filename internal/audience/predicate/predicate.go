@@ -37,6 +37,13 @@ var comparisonOperators = map[string]bool{
 	operators.GreaterEquals: true,
 }
 
+// requestedAggregateGranularity is the precision every event-aggregate condition currently requests.
+// A definition's window is always denominated in whole days (registry.Definition.AggregateWindowDays,
+// FR-AUD-03's "last N days"), so referencing an event-aggregate attribute in a predicate implicitly
+// asks for day-level precision — there is, today, no predicate-level way to ask for anything else.
+// CW-0004 Unit 5.
+const requestedAggregateGranularity = registry.AggregateGranularityDay
+
 // Compile parses and type-checks source against env, rejects a comparison that touches a
 // SemVer-typed attribute directly instead of through semver(...), and returns the resulting
 // Predicate. A save that returns an error must not persist the predicate — CW-0003 and CW-0004 both
@@ -48,6 +55,9 @@ func Compile(env *cel.Env, reg *registry.Registry, source string) (*Predicate, e
 	}
 
 	if err := validateSemVerUsage(ast.NativeRep(), reg); err != nil {
+		return nil, err
+	}
+	if err := validateAggregateGranularity(ast.NativeRep(), reg); err != nil {
 		return nil, err
 	}
 
@@ -104,6 +114,38 @@ func validateSemVerUsage(a *celast.AST, reg *registry.Registry) error {
 				)
 				return
 			}
+		}
+	})
+	celast.PreOrderVisit(a.Expr(), visitor)
+	return firstErr
+}
+
+// validateAggregateGranularity rejects a reference to an event-aggregate-sourced attribute whose
+// registered granularity is too coarse to answer the day-level precision every windowed condition
+// requests (requestedAggregateGranularity) — CW-0004 Unit 5's type-checker rule. It rejects nothing
+// against today's registry, where AggregateGranularityDay is the only granularity in use; it starts
+// rejecting the moment an attribute is registered at anything coarser.
+func validateAggregateGranularity(a *celast.AST, reg *registry.Registry) error {
+	var firstErr error
+	visitor := celast.NewExprVisitor(func(e celast.Expr) {
+		if firstErr != nil || e.Kind() != celast.IdentKind {
+			return
+		}
+		name := e.AsIdent()
+		def, ok := reg.Lookup(name)
+		if !ok || def.Source != registry.SourceEventAggregate {
+			return
+		}
+		carries, err := registry.GranularityCarries(def.AggregateGranularity, requestedAggregateGranularity)
+		if err != nil {
+			firstErr = fmt.Errorf("predicate: %q: %w", name, err)
+			return
+		}
+		if !carries {
+			firstErr = fmt.Errorf(
+				"predicate: %q is registered at %q granularity, too coarse for the %q-level precision every windowed condition requests",
+				name, def.AggregateGranularity, requestedAggregateGranularity,
+			)
 		}
 	})
 	celast.PreOrderVisit(a.Expr(), visitor)

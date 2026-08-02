@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/redis/go-redis/v9"
@@ -48,6 +49,22 @@ func Set(ctx context.Context, client *redis.Client, channelID string, bm *roarin
 		return fmt.Errorf("reverse: set channel %s: %w", channelID, err)
 	}
 	return nil
+}
+
+// Hash returns a compact, deterministic fingerprint of bm's contents — CW-0006 Unit 3's cursor and
+// Unit 4's bundle cache key both need to answer "is this channel's segment membership the same as
+// last time" without shipping the bitmap itself around, so this lives next to the bitmap it
+// fingerprints rather than being reimplemented in each of that item's two units. Not cryptographic,
+// for the same reason CW-0006 Unit 1's entity tag isn't: both uses compare a server's own prior state
+// against its current one, never guard against forgery.
+func Hash(bm *roaring.Bitmap) (string, error) {
+	data, err := bm.MarshalBinary()
+	if err != nil {
+		return "", fmt.Errorf("reverse: hash bitmap: %w", err)
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	return fmt.Sprintf("%x", h.Sum64()), nil
 }
 
 // SetMany overwrites several channels' bitmaps in one Redis transaction (MULTI/EXEC), so a reader
