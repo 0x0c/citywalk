@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/0x0c/citywalk/internal/audience/audiencetest"
+	"github.com/0x0c/citywalk/internal/audience/eval"
 	"github.com/0x0c/citywalk/internal/audience/predicate"
 	"github.com/0x0c/citywalk/internal/audience/registry"
 )
@@ -145,5 +146,61 @@ func TestCompileRejectsAnAggregateConditionCoarserThanRequestedGranularity(t *te
 	}
 	if !strings.Contains(err.Error(), "granularity") {
 		t.Errorf("Compile error = %q, want it to name the granularity mismatch", err)
+	}
+}
+
+// TestSemVerFunctionOrdersVersionsNumericallyAtEvaluation is the row-wise half of the ordering
+// CW-0004 Unit 1 requires: "2.10.0" is a later version than "2.9.0", and plain lexical string
+// comparison gets that backwards. The semver() wrapper an author must write is what makes the
+// comparison numeric, so this test evaluates it rather than only type-checking it.
+func TestSemVerFunctionOrdersVersionsNumericallyAtEvaluation(t *testing.T) {
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	p, err := predicate.Compile(env, reg, `semver(app_version) >= semver("2.9.0")`)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	evaluator := eval.New(env)
+
+	tests := map[string]bool{
+		"2.10.0": true, // Later than 2.9.0 numerically, earlier lexically — the case the wrapper exists for.
+		"2.9.0":  true, // The boundary itself.
+		"2.8.9":  false,
+		"2":      false, // A missing minor and patch default to 0, so this is 2.0.0.
+		"10":     true,  // And a bare major still compares as a number, not a first byte.
+	}
+
+	for version, want := range tests {
+		t.Run(version, func(t *testing.T) {
+			got, err := evaluator.Evaluate(p, map[string]any{"app_version": version})
+			if err != nil {
+				t.Fatalf("Evaluate(app_version=%q): %v", version, err)
+			}
+			if got != want {
+				t.Errorf("semver(%q) >= semver(\"2.9.0\") = %v, want %v", version, got, want)
+			}
+		})
+	}
+}
+
+// TestSemVerFunctionSurfacesAnUnparseableAttributeValueAsAnError keeps a malformed stored version
+// from evaluating to a quiet false: a channel whose app_version is not a version at all is a data
+// problem the caller has to see, not a channel that simply fails the predicate.
+func TestSemVerFunctionSurfacesAnUnparseableAttributeValueAsAnError(t *testing.T) {
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	p, err := predicate.Compile(env, reg, `semver(app_version) >= semver("2.9.0")`)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if _, err := eval.New(env).Evaluate(p, map[string]any{"app_version": "nightly-build"}); err == nil {
+		t.Fatal("Evaluate(app_version=\"nightly-build\"): got nil error, want the semver failure surfaced")
 	}
 }

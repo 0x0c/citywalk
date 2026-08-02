@@ -1,4 +1,4 @@
-.PHONY: site serve clean tools generate fmt vet lint build test check demo-up demo demo-down
+.PHONY: site serve clean tools generate fmt vet lint build test test-unit check demo-up demo demo-down
 
 # The roadmap site, generated from roadmaps/ into site/. Standard library only, so there is nothing
 # to install first.
@@ -10,7 +10,7 @@ serve: site
 	python3 -m http.server 8000 --directory site
 
 clean:
-	rm -rf site gen .tools
+	rm -rf site gen .tools coverage.out
 
 # Build the protobuf codegen plugins pinned in go.mod's tool block into .tools/bin, so buf generate
 # does not depend on protoc or buf being installed on the host.
@@ -40,6 +40,13 @@ build:
 
 test:
 	go test ./...
+
+# The unit suite under the two conditions plain `test` does not apply: the race detector, and a
+# randomized test order that catches a test only passing because a sibling ran first. This is what
+# .github/workflows/unit-tests.yml runs, kept here so the same command reproduces a CI failure
+# locally. It writes coverage.out, which that workflow turns into its job summary.
+test-unit:
+	go test ./... -race -shuffle=on -coverprofile=coverage.out
 
 # The mechanical gate every change must pass before it ships (.agent-workflows/implement/workflow.md
 # step 7). golangci-lint runs only when it is on PATH, since it is a separate install from `go get`.
