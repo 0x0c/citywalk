@@ -37,7 +37,7 @@ func adminTestPool(t *testing.T) *pgxpool.Pool {
 	if err := postgres.Migrate(ctx, pool, migrations.FS); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	for _, table := range []string{"message_audit_log", "messages"} {
+	for _, table := range []string{"message_audit_log", "delivery_change_log", "messages"} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("clear %s: %v", table, err)
 		}
@@ -222,6 +222,85 @@ func TestUpdateMessageStateRPCRecordsTheAuthenticatedActor(t *testing.T) {
 	if entry.GetActor() != "test-editor" {
 		t.Errorf("Actor = %q, want %q (the authenticated principal's subject)", entry.GetActor(), "test-editor")
 	}
+}
+
+// TestUpdateMessageStateRPCRecordsTheChangeLog exercises CW-0006 Unit 3's write hook end to end: a
+// real kill switch call, over the wire, produces the change log rows internal/delivery/deliver's
+// delta computation depends on — an upsert when the message crosses into active, a tombstone when it
+// crosses back out — matching admin.go's own reasoning for why UpdateMessageState is the only hook
+// this pass needs (CreateMessage always creates in draft, never eligible).
+func TestUpdateMessageStateRPCRecordsTheChangeLog(t *testing.T) {
+	pool := adminTestPool(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	if err != nil {
+		t.Fatalf("NewMux: %v", err)
+	}
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := adminv1connect.NewAdminServiceClient(server.Client(), server.URL)
+
+	created, err := client.CreateMessage(ctx, adminAuthed(connect.NewRequest(&adminv1.CreateMessageRequest{
+		Message: newMessageDefinition(now),
+	}), "test-editor-key"))
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	messageID := created.Msg.GetMessageId()
+
+	kindsAfterCreate, err := changeLogKinds(ctx, pool, messageID)
+	if err != nil {
+		t.Fatalf("changeLogKinds: %v", err)
+	}
+	if len(kindsAfterCreate) != 0 {
+		t.Fatalf("change log kinds after CreateMessage = %v, want none (drafts are never eligible)", kindsAfterCreate)
+	}
+
+	if _, err := client.UpdateMessageState(ctx, adminAuthed(connect.NewRequest(&adminv1.UpdateMessageStateRequest{
+		MessageId: messageID, NewState: "active",
+	}), "test-editor-key")); err != nil {
+		t.Fatalf("UpdateMessageState (activate): %v", err)
+	}
+	kinds, err := changeLogKinds(ctx, pool, messageID)
+	if err != nil {
+		t.Fatalf("changeLogKinds: %v", err)
+	}
+	if len(kinds) != 1 || kinds[0] != "upsert" {
+		t.Fatalf("change log kinds after activating = %v, want [upsert]", kinds)
+	}
+
+	if _, err := client.UpdateMessageState(ctx, adminAuthed(connect.NewRequest(&adminv1.UpdateMessageStateRequest{
+		MessageId: messageID, NewState: "paused",
+	}), "test-editor-key")); err != nil {
+		t.Fatalf("UpdateMessageState (pause): %v", err)
+	}
+	kinds, err = changeLogKinds(ctx, pool, messageID)
+	if err != nil {
+		t.Fatalf("changeLogKinds: %v", err)
+	}
+	if len(kinds) != 2 || kinds[1] != "tombstone" {
+		t.Fatalf("change log kinds after pausing = %v, want [upsert tombstone]", kinds)
+	}
+}
+
+// changeLogKinds returns messageID's delivery_change_log rows' kind values in seq order.
+func changeLogKinds(ctx context.Context, pool *pgxpool.Pool, messageID string) ([]string, error) {
+	rows, err := pool.Query(ctx, `SELECT kind FROM delivery_change_log WHERE message_id = $1 ORDER BY seq`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var kinds []string
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			return nil, err
+		}
+		kinds = append(kinds, kind)
+	}
+	return kinds, rows.Err()
 }
 
 // TestUpdateMessageStateRPCRejectsABackwardTransition demonstrates FR-MSG-01's forward-only rule

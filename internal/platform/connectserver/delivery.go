@@ -59,6 +59,12 @@ var defaultSyncConfig = deliver.Config{
 type DeliveryServer struct {
 	Pool  *pgxpool.Pool
 	Redis *redis.Client
+	// DeltaModeEnabled is CW-0006 Unit 3's per-project switch, threaded through separately from
+	// defaultSyncConfig rather than baked into it, so a caller (or a test) can turn delta mode on
+	// without needing to override every other synchronization parameter too. Zero value (false)
+	// matches defaultSyncConfig's own "off by default" for every construction site that predates
+	// Unit 3.
+	DeltaModeEnabled bool
 }
 
 func (s DeliveryServer) Sync(
@@ -72,7 +78,9 @@ func (s DeliveryServer) Sync(
 	if err != nil {
 		return nil, err
 	}
-	result, err := deliver.Sync(ctx, s.Pool, s.Redis, channelID, req.Msg.GetLanguage(), req.Msg.GetEtag(), time.Now(), defaultSyncConfig)
+	cfg := defaultSyncConfig
+	cfg.DeltaModeEnabled = s.DeltaModeEnabled
+	result, err := deliver.Sync(ctx, s.Pool, s.Redis, channelID, req.Msg.GetLanguage(), req.Msg.GetEtag(), req.Msg.GetCursor(), time.Now(), cfg)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -81,6 +89,8 @@ func (s DeliveryServer) Sync(
 		Unchanged:  result.Unchanged,
 		Etag:       result.ETag,
 		NextSyncAt: timestamppb.New(result.NextSyncAt),
+		IsDelta:    result.IsDelta,
+		Cursor:     result.Cursor,
 	}
 	if result.Payload != nil {
 		if remaining := result.Payload.ProjectBudgetRemaining; remaining != nil {
@@ -92,6 +102,7 @@ func (s DeliveryServer) Sync(
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 		resp.Entries = entries
+		resp.TombstonedMessageIds = result.Tombstones
 	}
 	return connect.NewResponse(resp), nil
 }

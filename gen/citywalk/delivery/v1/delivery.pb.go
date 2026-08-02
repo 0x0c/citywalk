@@ -31,7 +31,12 @@ type SyncRequest struct {
 	ChannelId string `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
 	Language  string `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
 	// etag is the tag the device's current payload was served with, empty on first synchronization.
-	Etag          string `protobuf:"bytes,3,opt,name=etag,proto3" json:"etag,omitempty"`
+	Etag string `protobuf:"bytes,3,opt,name=etag,proto3" json:"etag,omitempty"`
+	// cursor is CW-0006 Unit 3's delta-sync cursor: the version cursor the device last received,
+	// empty when it has none (first synchronization, or delta mode not yet in use). Ignored entirely
+	// when delta mode is off for this project — the response is always the full payload in that case.
+	// Plain string, the same convention etag above uses: empty unambiguously means "none".
+	Cursor        string `protobuf:"bytes,4,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -83,6 +88,13 @@ func (x *SyncRequest) GetLanguage() string {
 func (x *SyncRequest) GetEtag() string {
 	if x != nil {
 		return x.Etag
+	}
+	return ""
+}
+
+func (x *SyncRequest) GetCursor() string {
+	if x != nil {
+		return x.Cursor
 	}
 	return ""
 }
@@ -228,8 +240,20 @@ type SyncResponse struct {
 	// impression budget as of this assembly. Absent (not just zero) when no budget is configured for
 	// this synchronization — proto3 `optional` carries that distinction across the wire.
 	ProjectBudgetRemaining *int32 `protobuf:"varint,5,opt,name=project_budget_remaining,json=projectBudgetRemaining,proto3,oneof" json:"project_budget_remaining,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// is_delta is CW-0006 Unit 3: true when entries carries only what changed since the request's
+	// cursor rather than the complete payload. False — including every response from a project with
+	// delta mode off, or any device that never sends a cursor — preserves today's full-replace
+	// semantics: entries is the complete eligible set and tombstoned_message_ids is always empty.
+	IsDelta bool `protobuf:"varint,6,opt,name=is_delta,json=isDelta,proto3" json:"is_delta,omitempty"`
+	// tombstoned_message_ids lists message identifiers the device should remove locally. Only
+	// meaningful when is_delta is true.
+	TombstonedMessageIds []string `protobuf:"bytes,7,rep,name=tombstoned_message_ids,json=tombstonedMessageIds,proto3" json:"tombstoned_message_ids,omitempty"`
+	// cursor is the fresh version cursor the device should store and echo on its next
+	// synchronization. Empty whenever delta mode is off for this project, or on the unchanged path —
+	// nothing changed, so the device's existing cursor is still current.
+	Cursor        string `protobuf:"bytes,8,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SyncResponse) Reset() {
@@ -295,6 +319,27 @@ func (x *SyncResponse) GetProjectBudgetRemaining() int32 {
 		return *x.ProjectBudgetRemaining
 	}
 	return 0
+}
+
+func (x *SyncResponse) GetIsDelta() bool {
+	if x != nil {
+		return x.IsDelta
+	}
+	return false
+}
+
+func (x *SyncResponse) GetTombstonedMessageIds() []string {
+	if x != nil {
+		return x.TombstonedMessageIds
+	}
+	return nil
+}
+
+func (x *SyncResponse) GetCursor() string {
+	if x != nil {
+		return x.Cursor
+	}
+	return ""
 }
 
 type ConfirmRequest struct {
@@ -400,12 +445,13 @@ var File_citywalk_delivery_v1_delivery_proto protoreflect.FileDescriptor
 
 const file_citywalk_delivery_v1_delivery_proto_rawDesc = "" +
 	"\n" +
-	"#citywalk/delivery/v1/delivery.proto\x12\x14citywalk.delivery.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\\\n" +
+	"#citywalk/delivery/v1/delivery.proto\x12\x14citywalk.delivery.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"t\n" +
 	"\vSyncRequest\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x1a\n" +
 	"\blanguage\x18\x02 \x01(\tR\blanguage\x12\x12\n" +
-	"\x04etag\x18\x03 \x01(\tR\x04etag\"\xc1\x03\n" +
+	"\x04etag\x18\x03 \x01(\tR\x04etag\x12\x16\n" +
+	"\x06cursor\x18\x04 \x01(\tR\x06cursor\"\xc1\x03\n" +
 	"\x05Entry\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x18\n" +
@@ -421,14 +467,17 @@ const file_citywalk_delivery_v1_delivery_proto_rawDesc = "" +
 	"\x13control_policy_json\x18\n" +
 	" \x01(\fR\x11controlPolicyJson\x129\n" +
 	"\n" +
-	"expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\x91\x02\n" +
+	"expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xfa\x02\n" +
 	"\fSyncResponse\x12\x1c\n" +
 	"\tunchanged\x18\x01 \x01(\bR\tunchanged\x12\x12\n" +
 	"\x04etag\x18\x02 \x01(\tR\x04etag\x125\n" +
 	"\aentries\x18\x03 \x03(\v2\x1b.citywalk.delivery.v1.EntryR\aentries\x12<\n" +
 	"\fnext_sync_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"nextSyncAt\x12=\n" +
-	"\x18project_budget_remaining\x18\x05 \x01(\x05H\x00R\x16projectBudgetRemaining\x88\x01\x01B\x1b\n" +
+	"\x18project_budget_remaining\x18\x05 \x01(\x05H\x00R\x16projectBudgetRemaining\x88\x01\x01\x12\x19\n" +
+	"\bis_delta\x18\x06 \x01(\bR\aisDelta\x124\n" +
+	"\x16tombstoned_message_ids\x18\a \x03(\tR\x14tombstonedMessageIds\x12\x16\n" +
+	"\x06cursor\x18\b \x01(\tR\x06cursorB\x1b\n" +
 	"\x19_project_budget_remaining\"N\n" +
 	"\x0eConfirmRequest\x12\x1d\n" +
 	"\n" +

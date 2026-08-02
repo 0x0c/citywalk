@@ -15,6 +15,7 @@ import (
 	"github.com/0x0c/citywalk/internal/definition/model"
 	"github.com/0x0c/citywalk/internal/definition/store"
 	"github.com/0x0c/citywalk/internal/definition/validate"
+	"github.com/0x0c/citywalk/internal/delivery/changelog"
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
 )
 
@@ -33,7 +34,10 @@ func (s AdminServer) CreateMessage(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	// A created message always starts in draft (FR-MSG-01) regardless of what the request set;
-	// UpdateMessageState is the only path that moves it from there.
+	// UpdateMessageState is the only path that moves it from there. Draft is never eligible for any
+	// channel (internal/delivery/payload's eligibleMessageIDs filters on state = 'active'), so
+	// CW-0006 Unit 3's change log needs no write here — only UpdateMessageState can ever be the
+	// event that makes a message eligible for the first time.
 	msg.State = model.MessageStateDraft
 
 	if err := validate.Validate(ctx, s.Pool, msg, time.Now()); err != nil {
@@ -56,9 +60,33 @@ func (s AdminServer) UpdateMessageState(
 	}
 
 	newState := model.MessageState(req.Msg.GetNewState())
-	if err := store.UpdateState(ctx, s.Pool, req.Msg.GetMessageId(), newState, principal.Subject, time.Now()); err != nil {
+	now := time.Now()
+	if err := store.UpdateState(ctx, s.Pool, req.Msg.GetMessageId(), newState, principal.Subject, now); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
+
+	// CW-0006 Unit 3's change log: the kill switch is the only mutation surface that can move a
+	// message's eligibility today (see CreateMessage's own comment on why creation itself needs no
+	// entry), so this is the one hook point that needs it, matching CW-0006 Unit 1's entity tag —
+	// content-derived, recomputed at request time rather than invalidated on write — which is why no
+	// analogous hook exists anywhere in this codebase to mirror before this pass. Kind is derived
+	// from the destination state alone (see changelog.Kind's own doc comment on why that's enough):
+	// this write does not need to know the message's prior state to be correct.
+	kind := changelog.KindTombstone
+	if newState == model.MessageStateActive {
+		kind = changelog.KindUpsert
+	}
+	// Not folded into store.UpdateState's own transaction — that would need a signature change
+	// touching every one of that function's existing callers for a table only this handler writes
+	// to. A failure here after the state transition already committed is reported rather than
+	// swallowed (this codebase's standing rule against hiding a failure the requirements need
+	// observable), at the cost of the caller seeing an error for a state change that did apply; a
+	// retry finds CanTransition already satisfied (the target state accepts itself as a no-op) and
+	// succeeds, writing the change log entry it was missing.
+	if err := changelog.Record(ctx, s.Pool, req.Msg.GetMessageId(), kind, now); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
 	return connect.NewResponse(&adminv1.UpdateMessageStateResponse{State: string(newState)}), nil
 }
 

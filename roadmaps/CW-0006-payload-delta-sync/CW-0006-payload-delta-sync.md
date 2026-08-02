@@ -159,11 +159,34 @@ ceiling looks like a project whose campaigns are underperforming.
 
 - [x] Unit 1 — Content-derived entity tag over the elements that determine the rendered result.
 - [x] Unit 2 — Conditional request with a per-channel tag cache serving the no-change path.
-- [ ] Unit 3 — Cursor-based delta with tombstones and a bounded change log, falling back to full.
-      Not built. Delta mode is off by default per this unit's own text, and a per-channel delta needs
-      to account for eligibility changes (a channel entering or leaving a segment) as well as content
-      edits, which is a materially harder problem than the full-payload path this pass ships. Deferred
-      rather than half-built.
+- [x] Unit 3 — Cursor-based delta with tombstones and a bounded change log, falling back to full.
+      `internal/delivery/changelog` is the bounded log (`migrations/0011_delivery_change_log.sql`),
+      retained seven days and pruned opportunistically on write rather than by a scheduler this phase
+      doesn't have (`changelog.Retention`'s own comment gives the reasoning). `internal/delivery/cursor`
+      is the opaque token: a change log sequence, the channel's segment membership bitmap hash
+      (`internal/membership/reverse.Hash`, added for this and reused by Unit 4), and an issuance
+      timestamp. `internal/delivery/deliver`'s `computeDelta` composes the three: a membership hash
+      mismatch, a seq the log no longer covers, or an undecodable cursor all fall back to a full
+      payload and a fresh cursor, never an error. The per-channel eligibility problem this box's prior
+      note flagged — a channel entering or leaving a segment — is what the membership hash resolves:
+      the hash mismatch catches any such change, so the change log itself needs to track message-level
+      events alone, and the sole one that exists today is
+      `internal/platform/connectserver/admin.go`'s `UpdateMessageState` (`CreateMessage` always
+      creates in draft, never eligible, so it needs no entry). A message's delivery window opening
+      needs no change log write either — the cursor's own issuance timestamp against the message's
+      `window_start` catches it — and a window closing needs no tombstone at all, since
+      `payload.Entry.ExpiresAt` already carries CW-0002's self-expiry contract. Delta mode is gated by
+      `deliver.Config.DeltaModeEnabled`, off by default; no project entity exists yet to hold a
+      genuine per-project switch, so this is a phase-one stand-in matching how CW-0007's
+      `ProjectBudgetCap` already handles the same gap. Tested in
+      `internal/delivery/changelog/changelog_integration_test.go` (monotonic seq, the `Since` query,
+      pruning), `internal/delivery/cursor/cursor_test.go` (encode/decode, garbage never errors), and
+      `internal/delivery/deliver/deliver_integration_test.go` (a recent cursor gets only what changed,
+      a removed message gets a tombstone, a garbage or too-old cursor falls back to full, delta mode
+      off never produces a cursor) — plus
+      `internal/platform/connectserver/admin_integration_test.go`'s
+      `TestUpdateMessageStateRPCRecordsTheChangeLog` proving the real `UpdateMessageState` call site
+      writes it, not merely the isolated logic.
 - [ ] Unit 4 — Two-tier assembly cache: shared bundle plus per-channel overlay.
       Not built. The premise that motivated deferring this has changed since it was first written:
       CW-0008's experiment and holdout assignment is now wired into payload assembly, so there is a
