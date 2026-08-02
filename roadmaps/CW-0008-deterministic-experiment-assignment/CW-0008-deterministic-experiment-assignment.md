@@ -166,18 +166,21 @@ modulo on a negative hash.
       channel landing there is excluded from its payload exactly like a channel that never qualified.
       `InProjectHoldout` (the separate, project-wide control group) has no caller yet — there is no
       project entity in this schema for it to scope against.
-- [ ] Unit 5 — Holdout qualification events, and reporting from the recorded variant.
-      Reporting from the recorded variant is done (see Unit 1's note). Still not built: holdout
-      qualification events. CW-0009's event pipeline can record one
-      (`model.KindHoldoutQualified`) and its attribution package counts it toward the holdout's rate
-      the same way it counts an impression, but nothing emits one — a channel landing in a message's
-      holdout is simply excluded from its payload today, with no corresponding event. Emitting one
-      would need the delivery path itself to write to the event log during payload assembly (a
-      read path, awkward for a side effect meant to represent "the device would have shown this and
-      didn't"), and `InProjectHoldout`'s project-wide holdout stays entirely unwired, same as noted in
-      Unit 4. CW-0007's governance layer already emits the one suppression reason a server-side
-      decision can produce (`project_budget`); the other seven reasons this unit's other half would
-      read are device-side decisions and permanently out of scope for this repository.
+- [x] Unit 5 — Holdout qualification events, and reporting from the recorded variant.
+      Reporting from the recorded variant is done (see Unit 1's note). Holdout qualification events
+      are now wired into the same live delivery path. `internal/delivery/payload.buildEntry` calls
+      `recordHoldoutQualified` whenever a channel lands in a message's own holdout.
+      `recordHoldoutQualified` writes a `model.KindHoldoutQualified` event through
+      `internal/event/ingest.Record`. That is the same server-emits-an-event-as-a-side-effect pattern
+      `checkProjectBudget` (`internal/platform/connectserver/delivery.go`) uses for CW-0007's
+      `project_budget` suppression. Both fail the caller rather than discard a write error.
+      `internal/event/attribution` already reads these events as exposures under `HoldoutVariantID`.
+      `TestHoldoutQualifiedEventFromBuildIsCountedByAttribution`
+      (`internal/delivery/payload/payload_integration_test.go`) proves the chain against real Postgres
+      and Redis. `payload.Build` excludes the channel, leaves the event behind, and a later conversion
+      attributes to the holdout. `InProjectHoldout`'s project-wide holdout still has no caller, same
+      as Unit 4's note. This schema still has no project entity for it to scope against, and adding
+      one is a separate, larger change than this unit.
 - [x] Unit 6 — Automated uniformity and server-to-device parity tests.
       The uniformity test and the fixture parity table are both implemented — the fixture is the
       server-side artifact a device implementation would be checked against, since no device

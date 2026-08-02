@@ -17,6 +17,7 @@ import (
 	"github.com/0x0c/citywalk/internal/definition/model"
 	"github.com/0x0c/citywalk/internal/definition/store"
 	"github.com/0x0c/citywalk/internal/delivery/payload"
+	"github.com/0x0c/citywalk/internal/event/attribution"
 	"github.com/0x0c/citywalk/internal/membership/batch"
 	"github.com/0x0c/citywalk/internal/membership/ordinal"
 	"github.com/0x0c/citywalk/internal/membership/segment"
@@ -389,6 +390,72 @@ func TestBuildEmitsAHoldoutQualifiedEventWhenTheChannelLandsInItsHoldout(t *test
 	}
 	if count != 1 {
 		t.Errorf("holdout_qualified event count = %d, want 1", count)
+	}
+}
+
+// TestHoldoutQualifiedEventFromBuildIsCountedByAttribution carries CW-0008 Unit 5's counterfactual all
+// the way to CW-0009's reporting side: the holdout_qualified row Build leaves behind for an excluded
+// channel is not just a row in events_log — attribution.Run picks it up as an exposure exactly like an
+// impression, and a later conversion from that same channel attributes to the holdout
+// (attribution.HoldoutVariantID), which is what gives the counterfactual comparison a holdout exists
+// for its denominator.
+func TestHoldoutQualifiedEventFromBuildIsCountedByAttribution(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	channelID := insertChannel(t, ctx, pool, map[string]any{"country": "JP"})
+
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	seg, err := segment.Save(ctx, pool, env, reg, "Japan", `country == "JP"`)
+	if err != nil {
+		t.Fatalf("segment.Save: %v", err)
+	}
+
+	msg := &model.Message{
+		Name: "Fully held out", State: model.MessageStateActive,
+		Window:          model.Window{Start: now.Add(-time.Hour), End: now.Add(time.Hour)},
+		AudienceRef:     seg.ID,
+		HoldoutFraction: 1.0,
+		Variants: []model.Variant{{
+			Weight: 100, Language: "en", SchemaVersion: model.SchemaVersion{Major: model.CurrentMajor},
+			Content: model.DialogContent{},
+		}},
+	}
+	if err := store.InsertMessage(ctx, pool, msg); err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	if _, err := batch.Recompute(ctx, pool, redisClient, reg); err != nil {
+		t.Fatalf("batch.Recompute: %v", err)
+	}
+
+	if _, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// A conversion 10 minutes after the holdout qualification Build just recorded, exactly as a
+	// device-submitted custom event would arrive.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO events_log (id, channel_id, kind, name, device_time) VALUES (gen_random_uuid(), $1, 'custom', 'purchase', $2)`,
+		channelID, now.Add(10*time.Minute),
+	); err != nil {
+		t.Fatalf("insert conversion event: %v", err)
+	}
+
+	if err := attribution.Run(ctx, pool, msg.ID, "purchase", time.Hour); err != nil {
+		t.Fatalf("attribution.Run: %v", err)
+	}
+
+	counts, err := attribution.Counts(ctx, pool, msg.ID)
+	if err != nil {
+		t.Fatalf("attribution.Counts: %v", err)
+	}
+	if counts[attribution.HoldoutVariantID] != 1 {
+		t.Errorf("counts[HoldoutVariantID] = %d, want 1 (the real holdout_qualified event Build recorded)", counts[attribution.HoldoutVariantID])
 	}
 }
 
