@@ -1,4 +1,4 @@
-.PHONY: site serve clean tools generate fmt vet lint build test check
+.PHONY: site serve clean tools generate fmt vet lint build test check demo-up demo demo-down
 
 # The roadmap site, generated from roadmaps/ into site/. Standard library only, so there is nothing
 # to install first.
@@ -45,3 +45,16 @@ test:
 # step 7). golangci-lint runs only when it is on PATH, since it is a separate install from `go get`.
 check: fmt vet build test
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; else echo "golangci-lint not installed, skipping"; fi
+
+# Start the disposable PostgreSQL and Redis cmd/demo (see docs/demo.md) runs against, and wait for
+# both to report healthy before returning.
+demo-up:
+	docker compose -f deploy/docker-compose.yml up -d --wait
+
+# Run the demo walkthrough against whatever demo-up started. Requires demo-up to have run first.
+demo:
+	go run ./cmd/demo
+
+# Tear down the containers demo-up started, including their data.
+demo-down:
+	docker compose -f deploy/docker-compose.yml down -v
