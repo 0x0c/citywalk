@@ -185,11 +185,14 @@ split, which is why it is a separate item rather than a paragraph here.
       CW-0008 itself still has open units (the display-time pin and holdout-qualification telemetry
       are permanently or currently out of reach — see its own progress notes), so this box mirrors
       that rather than reaching a more finished-sounding state on its own account.
-- [ ] Unit 4 — Ingestion service: event acceptance, deduplication, and publication.
+- [x] Unit 4 — Ingestion service: event acceptance, deduplication, and publication.
       CW-0009's acceptance, per-channel rate limiting, identifier-based deduplication, and rollup
-      consumption are implemented and tested. "Publishes them onto a stream" is phase-one Postgres
-      (documented in `migrations/0006_events.sql`), not a real stream a second consumer could scale
-      across independently — CW-0009's own Unit 3 note covers this in detail.
+      consumption are implemented and tested. "Publishes them onto a stream" has two paths now: the
+      active default is phase-one Postgres (`migrations/0006_events.sql`), and a real Kafka-compatible
+      stream a second consumer can scale across independently exists behind CW-0010 Unit 5's config
+      flag — CW-0009's own Unit 3 note covers both in detail. Checked now that CW-0009 is itself marked
+      Implemented — this box has always mirrored its state rather than reaching a more finished-sounding
+      state on its own account.
 - [ ] Unit 5 — Governance: device-side caps and priority, server-side project caps and confirmation.
       The server-side half — CW-0007's project-wide budget, its atomic strict-confirmation decrement,
       and suppression telemetry — is implemented and tested. The device-side half (per-message caps,

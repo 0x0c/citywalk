@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0009](CW-0009-event-ingestion-analytics.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **In progress** |
+| Status | **Implemented** |
 | Topic | Measurement |
 | Related | [CW-0004](../CW-0004-audience-predicate-engine/CW-0004-audience-predicate-engine.md), [CW-0007](../CW-0007-display-governance/CW-0007-display-governance.md), [CW-0008](../CW-0008-deterministic-experiment-assignment/CW-0008-deterministic-experiment-assignment.md) |
 <!-- /CW-METADATA -->

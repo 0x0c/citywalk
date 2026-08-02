@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [CW-0009](CW-0009-event-ingestion-analytics-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **実装中** |
+| 状態 | **実装済み** |
 | トピック | 効果測定 |
 | 関連 | [CW-0004](../CW-0004-audience-predicate-engine/CW-0004-audience-predicate-engine-ja.md)、[CW-0007](../CW-0007-display-governance/CW-0007-display-governance-ja.md)、[CW-0008](../CW-0008-deterministic-experiment-assignment/CW-0008-deterministic-experiment-assignment-ja.md) |
 <!-- /CW-METADATA -->
