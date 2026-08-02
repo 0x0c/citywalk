@@ -237,7 +237,14 @@ services later is cheap when the boundaries already exist and expensive when the
 - [ ] Unit 1 — The load estimate, revalidated against measurements once traffic exists.
 - [ ] Unit 2 — Go services, Protocol Buffers definitions served over Connect, library baseline.
 - [ ] Unit 3 — PostgreSQL schema and the migration-before-code deployment rule.
-- [ ] Unit 4 — Redis for the membership index, tag cache, assembly bundles, and counters.
+- [x] Unit 4 — Redis for the membership index, tag cache, assembly bundles, and counters.
+      All four named uses are live: the reverse membership index (`internal/membership/reverse`,
+      CW-0005 Unit 3), the entity-tag cache (`internal/delivery/etag`, CW-0006 Unit 2), the
+      sliding-window budget counters (`internal/governance/budget`, CW-0007 Unit 4), and — the piece
+      this box was waiting on — the assembly bundle cache (`internal/delivery/payload/bundle.go`,
+      CW-0006 Unit 4), keyed by language, declared schema major, and a hash of the channel's
+      membership bitmap, with campaign-keyed invalidation through a Redis set index. Everything here
+      is derived or expiring except the counters, exactly as this unit's own text accepts.
 - [ ] Unit 5 — The Kafka-compatible log and its consumer positions.
 - [ ] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
 - [ ] Unit 7 — Object storage with content-addressed asset URLs behind a delivery network.
