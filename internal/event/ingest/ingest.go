@@ -1,8 +1,9 @@
 // Package ingest implements CW-0009 Unit 2: batch acceptance. Accept validates each event's shape,
-// enforces the per-channel rate limit, appends the surviving events to the log (Unit 3's seam) with
-// merge-time dedup on the event identifier (Unit 4), and returns counts. It performs no aggregation,
-// no lookup against campaign state, and no deduplication beyond the identifier — which is what keeps
-// acceptance latency independent of everything downstream.
+// flags (but does not reject) an event whose device time is implausible against Unit 1's clock-offset
+// tolerance, enforces the per-channel rate limit, appends the surviving events to the log (Unit 3's
+// seam) with merge-time dedup on the event identifier (Unit 4), and returns counts. It performs no
+// aggregation, no lookup against campaign state, and no deduplication beyond the identifier — which is
+// what keeps acceptance latency independent of everything downstream.
 package ingest
 
 import (
@@ -26,16 +27,39 @@ type Result struct {
 	Accepted            int
 	RejectedInvalid     int
 	RejectedRateLimited int
+	// ClockSkewFlagged counts events whose device time diverged from this batch's receipt time by
+	// more than model's tolerance (model.ClockSkewImplausible). A flagged event is still accepted —
+	// see the comment where this is set, in Accept — this is a count for observability, not a
+	// rejection reason.
+	ClockSkewFlagged int
 }
 
 // rejectedCounter records Unit 2's rejected-volume-by-channel metric: without it, a device stuck in
 // a render loop degrades silently instead of showing up as a spike a project owner can see.
 var rejectedCounter = mustCounter()
 
+// clockSkewCounter records Unit 1's clock-offset sanity check: docs/requirements.md's constraint #2
+// requires that a device whose offset exceeds a threshold be "detected and logged," and this is that
+// detection surfaced as a metric rather than only as Result.ClockSkewFlagged, so it is visible without
+// a caller having to inspect every batch's result.
+var clockSkewCounter = mustClockSkewCounter()
+
 func mustCounter() metric.Int64Counter {
 	c, err := otel.Meter("citywalk/event/ingest").Int64Counter(
 		"citywalk.event.rejected_count",
 		metric.WithDescription("Count of submitted events rejected before reaching the log, by channel and reason"),
+	)
+	if err != nil {
+		// Int64Counter only fails on a malformed instrument name, fixed at compile time.
+		panic(err)
+	}
+	return c
+}
+
+func mustClockSkewCounter() metric.Int64Counter {
+	c, err := otel.Meter("citywalk/event/ingest").Int64Counter(
+		"citywalk.event.clock_skew_flagged_count",
+		metric.WithDescription("Count of accepted events whose device time diverged from server receipt time beyond tolerance, by channel"),
 	)
 	if err != nil {
 		// Int64Counter only fails on a malformed instrument name, fixed at compile time.
@@ -62,6 +86,14 @@ func Accept(
 			result.RejectedInvalid++
 			recordRejection(ctx, channelID, "invalid", 1)
 			continue
+		}
+		// Unit 1's clock-offset sanity bound: an event this far off is still accepted (rejecting it
+		// would need a round trip the device may never make again), but it is flagged rather than
+		// trusted — model.EffectiveTime is what stops it from being trusted verbatim wherever a
+		// rollup buckets by time downstream (Unit 5's consumer).
+		if model.ClockSkewImplausible(e.DeviceTime, now) {
+			result.ClockSkewFlagged++
+			recordClockSkew(ctx, channelID, 1)
 		}
 		valid = append(valid, e)
 	}
@@ -92,6 +124,12 @@ func recordRejection(ctx context.Context, channelID, reason string, n int) {
 	rejectedCounter.Add(ctx, int64(n), metric.WithAttributes(
 		attribute.String("citywalk.event.channel_id", channelID),
 		attribute.String("citywalk.event.reject_reason", reason),
+	))
+}
+
+func recordClockSkew(ctx context.Context, channelID string, n int) {
+	clockSkewCounter.Add(ctx, int64(n), metric.WithAttributes(
+		attribute.String("citywalk.event.channel_id", channelID),
 	))
 }
 

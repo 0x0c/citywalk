@@ -168,11 +168,17 @@ closed set of reasons.
 
 - [ ] Unit 1 — The event envelope, time-ordered identifiers, and the two-timestamp rule.
       The envelope (`internal/event/model`), the closed set of kinds, the impression-family field
-      requirements, and storing both device time and server time are implemented and tested. Not
-      built: correcting device time by a measured clock offset, clamping it to the receipt time, and
-      the scheduled recomputation of the last several days' aggregates so late arrivals land in the
-      day they belong to — today a late-arriving event's rollups land wherever its own device_time
-      falls, computed once at consumption, never revisited.
+      requirements, and storing both device time and server time are implemented and tested. Also now
+      built: a clock-offset sanity bound, `model.ClockSkewImplausible`, that flags rather than
+      silently trusts a device time diverging from receipt time past tolerance, surfaced per batch as
+      `ingest.Result.ClockSkewFlagged` and as an OpenTelemetry counter. Its `MaxFutureSkew` and
+      `MaxPastSkew` tolerances are documented judgement calls, since neither `docs/requirements.md`
+      nor this design names a concrete threshold. Also built: `model.EffectiveTime`, which every
+      rollup writer in `internal/event/consumer` now buckets by, including `suppression_rollup` — the
+      one writer that was still bucketing by raw `device_time`, fixed here to the same receipt-time
+      clamp the targeting and campaign rollups already used. Not built: the scheduled recomputation of
+      the last several days' aggregates so a late-but-plausible arrival's bucket is corrected once it
+      shows up, still blocked on the job queue/scheduler CW-0010 Unit 8 does not yet provide.
 - [x] Unit 2 — Cheap acceptance with per-channel rate limiting and rejection metrics.
       `internal/event/ingest` validates each event independently (one bad event does not sink the
       rest of its batch), enforces a per-channel fixed-window rate limit in Redis

@@ -56,27 +56,13 @@ func (e storedEvent) eventName() string {
 	return string(e.Kind)
 }
 
-// bucketTime is the day/hour a rollup counts e toward: e's device time, unless the server received
-// it before that device time arrived, in which case e.effectiveTime clamps it to server_time. See
-// effectiveTime's doc comment for what this does and does not correct for.
+// bucketTime is the day/hour every rollup below counts e toward: model.EffectiveTime of e's two
+// timestamps, which is e's device time unless Unit 1's clock-offset check says it cannot be trusted,
+// in which case it is the server's own receipt time instead. Every rollup writer in this file must
+// bucket by this, not by e.DeviceTime directly, or a device's clock — accidentally or deliberately
+// wrong — can place a count in a bucket the server never actually reached.
 func (e storedEvent) bucketTime() time.Time {
-	return effectiveTime(e.DeviceTime, e.ServerTime)
-}
-
-// effectiveTime implements the clamp half of CW-0009 Unit 1's correction rule — "reports on device
-// time corrected by the measured clock offset and clamped to the receipt time" — by returning
-// deviceTime unless it is after serverTime, in which case it returns serverTime instead. A device
-// whose clock reads into the future (by accident or by tampering) can therefore never inflate a
-// rollup bucket for a day the server has not itself reached yet.
-//
-// This is only the clamp. The other half of that same sentence — estimating a device's typical small
-// clock offset and correcting for it, rather than just capping outright-future timestamps — is not
-// implemented here; it is out of scope for this change and remains open against Unit 1.
-func effectiveTime(deviceTime, serverTime time.Time) time.Time {
-	if deviceTime.After(serverTime) {
-		return serverTime
-	}
-	return deviceTime
+	return model.EffectiveTime(e.DeviceTime, e.ServerTime)
 }
 
 // RunOnce advances consumerName past every event currently in events_log, up to batchLimit rows,
@@ -238,7 +224,7 @@ func applySuppressionRollup(ctx context.Context, tx pgx.Tx, e storedEvent) error
 		`INSERT INTO suppression_rollup (message_id, reason, day, count)
          VALUES ($1, $2, date_trunc('day', $3::timestamptz), 1)
          ON CONFLICT (message_id, reason, day) DO UPDATE SET count = suppression_rollup.count + 1`,
-		e.MessageID, e.SuppressionReason, e.DeviceTime,
+		e.MessageID, e.SuppressionReason, e.bucketTime(),
 	)
 	if err != nil {
 		return fmt.Errorf("consumer: apply suppression rollup for event seq %d: %w", e.Seq, err)

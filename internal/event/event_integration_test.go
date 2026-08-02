@@ -186,7 +186,8 @@ func TestAcceptDedupsAndAggregates(t *testing.T) {
 // TestRunOnceClampsFutureDeviceTimeToServerTime is CW-0009 Unit 1's clamp rule end to end: a device
 // whose clock reads three days into the future must not be able to inflate a rollup bucket for a day
 // the server has not reached yet — the targeting rollup row lands on the day Accept actually received
-// the event (server_time, via now), not the day the device claims.
+// the event (server_time, via now), not the day the device claims. Accept must also flag the event
+// (Result.ClockSkewFlagged) rather than trust it verbatim, without rejecting it outright.
 func TestRunOnceClampsFutureDeviceTimeToServerTime(t *testing.T) {
 	pool, redisClient := testDeps(t)
 	ctx := context.Background()
@@ -209,6 +210,9 @@ func TestRunOnceClampsFutureDeviceTimeToServerTime(t *testing.T) {
 	if result.Accepted != 1 {
 		t.Fatalf("Accept() = %+v, want 1 accepted", result)
 	}
+	if result.ClockSkewFlagged != 1 {
+		t.Errorf("Accept() ClockSkewFlagged = %d, want 1 (a device clock 72h into the future is implausible)", result.ClockSkewFlagged)
+	}
 
 	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -227,6 +231,90 @@ func TestRunOnceClampsFutureDeviceTimeToServerTime(t *testing.T) {
 	wantDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	if !day.Equal(wantDay) {
 		t.Errorf("targeting_rollup day = %v, want %v (now's day, clamped from the device's claimed future day %v)", day, wantDay, futureDeviceTime)
+	}
+}
+
+// TestAcceptFlagsButDoesNotRejectAnImplausiblyOldDeviceTime is the past-direction half of Unit 1's
+// clock-offset sanity bound: a device time far older than any real offline backlog (here, a year) is
+// still accepted — the event is not lost, and its raw device time is preserved for display or
+// debugging — but it is both flagged (Result.ClockSkewFlagged) and not trusted for bucketing, which
+// TestRunOnceClampsImplausiblyOldDeviceTimeToServerTime below proves separately.
+func TestAcceptFlagsButDoesNotRejectAnImplausiblyOldDeviceTime(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	channelID := insertChannel(t, ctx, pool)
+	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	ancientDeviceTime := now.Add(-365 * 24 * time.Hour)
+
+	batch := []model.Event{
+		{
+			ID: "01912d2c-0000-7000-8000-000000000041", ChannelID: channelID,
+			Kind: model.KindCustom, Name: "screen_view", DeviceTime: ancientDeviceTime,
+		},
+	}
+
+	result, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now)
+	if err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if result.Accepted != 1 {
+		t.Fatalf("Accept() = %+v, want 1 accepted (an implausible clock is flagged, not rejected)", result)
+	}
+	if result.ClockSkewFlagged != 1 {
+		t.Errorf("Accept() ClockSkewFlagged = %d, want 1 (a device clock a year in the past is implausible)", result.ClockSkewFlagged)
+	}
+
+	var storedDeviceTime time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT device_time FROM events_log WHERE channel_id = $1`, channelID,
+	).Scan(&storedDeviceTime); err != nil {
+		t.Fatalf("query events_log: %v", err)
+	}
+	if !storedDeviceTime.Equal(ancientDeviceTime) {
+		t.Errorf("stored device_time = %v, want %v (the raw device time is preserved for display/debugging)", storedDeviceTime, ancientDeviceTime)
+	}
+}
+
+// TestRunOnceClampsImplausiblyOldDeviceTimeToServerTime is the past-direction half of Unit 1's clamp
+// rule end to end: an event whose device time is implausibly old (not merely a late-but-real offline
+// backlog) buckets by the server's receipt time, not the claimed device day — the same protection
+// TestRunOnceClampsFutureDeviceTimeToServerTime proves for the future direction.
+func TestRunOnceClampsImplausiblyOldDeviceTimeToServerTime(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	channelID := insertChannel(t, ctx, pool)
+	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	ancientDeviceTime := now.Add(-365 * 24 * time.Hour)
+
+	batch := []model.Event{
+		{
+			ID: "01912d2c-0000-7000-8000-000000000042", ChannelID: channelID,
+			Kind: model.KindCustom, Name: "screen_view", DeviceTime: ancientDeviceTime,
+		},
+	}
+
+	if _, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	var day time.Time
+	var count int64
+	if err := pool.QueryRow(ctx,
+		`SELECT day, count FROM targeting_rollup WHERE channel_id = $1 AND event_name = 'screen_view'`, channelID,
+	).Scan(&day, &count); err != nil {
+		t.Fatalf("query targeting_rollup: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("targeting_rollup screen_view count = %d, want 1", count)
+	}
+	wantDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	if !day.Equal(wantDay) {
+		t.Errorf("targeting_rollup day = %v, want %v (now's day, clamped from the device's implausible claimed day %v)", day, wantDay, ancientDeviceTime)
 	}
 }
 
@@ -363,6 +451,49 @@ func TestSuppressionReportBreaksDownByReason(t *testing.T) {
 	}
 	if breakdown.ByReason[string(model.ReasonProjectBudget)] != 1 {
 		t.Errorf("ByReason[project_budget] = %d, want 1", breakdown.ByReason[string(model.ReasonProjectBudget)])
+	}
+}
+
+// TestSuppressionRollupBucketsByReceiptTimeNotRawDeviceTime is Unit 1's two-timestamp rule applied to
+// the suppression rollup specifically: a suppression event with a clock-tampered future device time
+// must land in server-time's day, exactly like the targeting and campaign rollups already do — the
+// suppression rollup must not be the one rollup writer that trusts device_time verbatim.
+func TestSuppressionRollupBucketsByReceiptTimeNotRawDeviceTime(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	channelID := insertChannel(t, ctx, pool)
+	messageID, _ := insertMessage(t, ctx, pool)
+	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	futureDeviceTime := now.Add(72 * time.Hour)
+
+	batch := []model.Event{
+		{
+			ID: "01912d2c-0000-7000-8000-000000000034", ChannelID: channelID, Kind: model.KindSuppression,
+			MessageID: messageID, SuppressionReason: model.ReasonCooldown, DeviceTime: futureDeviceTime,
+		},
+	}
+	if _, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	var day time.Time
+	var count int64
+	if err := pool.QueryRow(ctx,
+		`SELECT day, count FROM suppression_rollup WHERE message_id = $1 AND reason = $2`,
+		messageID, string(model.ReasonCooldown),
+	).Scan(&day, &count); err != nil {
+		t.Fatalf("query suppression_rollup: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("suppression_rollup count = %d, want 1", count)
+	}
+	wantDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	if !day.Equal(wantDay) {
+		t.Errorf("suppression_rollup day = %v, want %v (now's day, clamped from the device's claimed future day %v)", day, wantDay, futureDeviceTime)
 	}
 }
 
