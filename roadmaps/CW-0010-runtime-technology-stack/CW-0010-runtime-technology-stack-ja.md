@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装中** |
 | トピック | プラットフォーム |
-| 関連 | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope-ja.md)、[CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync-ja.md)、[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) |
+| 関連 | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope-ja.md)、[CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema-ja.md)、[CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync-ja.md)、[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) |
 <!-- /CW-METADATA -->
 
 ## はじめに
@@ -191,6 +191,16 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
 [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope-ja.md) の
 サービス分割は、プロセスがいくつであろうと第1段階からコードのなかで保ちます。境界がすでにあれば後から
 サービスを分けるのは安く、なければ高くつくからです。
+
+この段階分けが決めるのは、どの格納先がいつから本番のトラフィックを担うかです。支える側のコードが
+いつ存在してよいかは決めません。Kafka 互換のログと ClickHouse とオブジェクトストレージのクライアントは、
+いずれも第1段階のコードベースに含めます。最初から第2段階の設計に対して作り、試験します。選ぶのは設定の
+切り替えです。デフォルトは第1段階の PostgreSQL と Redis の経路です。
+[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) の収集経路と
+[CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema-ja.md) のアセット参照は、
+こうして両方の段階に対して一度だけ書けば済みます。イベントの量がついに第2段階を開かせる時点でも書き直す
+必要はありません。設定を切り替えるのは、量が実際にそれを正当化した時点で下す運用上の判断です。その判断が
+和らげるはずの負荷そのものの下で進める、もう1つの開発案件にはなりません。
 
 ## 検討した代替案
 

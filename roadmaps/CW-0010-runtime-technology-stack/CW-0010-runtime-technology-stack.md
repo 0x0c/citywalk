@@ -9,7 +9,7 @@
 | Author | [@0x0c](https://github.com/0x0c) |
 | Status | **In progress** |
 | Topic | Platform |
-| Related | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md), [CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md) |
+| Related | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope.md), [CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md), [CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md) |
 <!-- /CW-METADATA -->
 
 ## Introduction
@@ -203,6 +203,17 @@ runtime the constraint. The service split from
 [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope.md) is
 maintained in the code from the first phase regardless of how many processes run, because separating
 services later is cheap when the boundaries already exist and expensive when they do not.
+
+That staging gates when each store carries production traffic. It does not gate when the code may
+exist. The first phase's own codebase already holds the Kafka-compatible log, ClickHouse, and the
+object storage client. This codebase builds and tests each one against the second phase's design.
+A configuration flag selects between them. It defaults to the first phase's PostgreSQL-and-Redis
+path.
+[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md)'s ingestion
+path and [CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema.md)'s
+asset references get written once, against both phases. Neither needs a rewrite once event volume
+forces the second phase open. Flipping the flag is then an operational decision, made once volume
+justifies it. Load pressure never forces a second engineering project instead.
 
 ## Alternatives considered
 
