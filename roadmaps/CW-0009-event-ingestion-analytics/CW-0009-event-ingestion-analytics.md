@@ -168,7 +168,7 @@ closed set of reasons.
 
 - [ ] Unit 1 — The event envelope, time-ordered identifiers, and the two-timestamp rule.
       The envelope (`internal/event/model`), the closed set of kinds, the impression-family field
-      requirements, and storing both device time and server time are implemented and tested. Also now
+      requirements, and storing both device time and server time are implemented and tested. Also
       built: a clock-offset sanity bound, `model.ClockSkewImplausible`, that flags rather than
       silently trusts a device time diverging from receipt time past tolerance, surfaced per batch as
       `ingest.Result.ClockSkewFlagged` and as an OpenTelemetry counter. Its `MaxFutureSkew` and
@@ -176,9 +176,24 @@ closed set of reasons.
       nor this design names a concrete threshold. Also built: `model.EffectiveTime`, which every
       rollup writer in `internal/event/consumer` now buckets by, including `suppression_rollup` — the
       one writer that was still bucketing by raw `device_time`, fixed here to the same receipt-time
-      clamp the targeting and campaign rollups already used. Not built: the scheduled recomputation of
-      the last several days' aggregates so a late-but-plausible arrival's bucket is corrected once it
-      shows up, still blocked on the job queue/scheduler CW-0010 Unit 8 does not yet provide.
+      clamp the targeting and campaign rollups already used.
+
+      Also now built: the scheduled recomputation this unit calls for.
+      `internal/event/consumer/recompute_job.go` registers `RollupRecomputeWorker`, a `river.Worker`
+      (CW-0010 Unit 8), as a periodic job that drains `events_log` into the rollups every minute,
+      matching Unit 5's own "minute-level freshness" framing. The job does not re-scan a fixed
+      trailing window of days. The consumer already advances a monotonic per-consumer offset and
+      applies each event exactly once, through an additive `ON CONFLICT ... DO UPDATE`; re-scanning
+      a window on top of that would re-apply already-counted events and double-count them. Draining
+      the offset-tracked backlog on a schedule delivers the same outcome for an arrival of any
+      lateness, not only a chosen window of days: a late arrival lands in the day it belongs to.
+      `recompute_job.go`'s own comment records this reasoning in full.
+
+      Still not built: estimating a device's typical clock offset and correcting for it — the "device
+      time corrected by the measured clock offset" half of this unit's design text, distinct from the
+      clamp above, which only bounds an implausible timestamp rather than adjusting a plausible one
+      for a device's steady skew. `model.EffectiveTime`'s doc comment states this explicitly as out of
+      scope for the change that added the clamp, and it remains open.
 - [x] Unit 2 — Cheap acceptance with per-channel rate limiting and rejection metrics.
       `internal/event/ingest` validates each event independently (one bad event does not sink the
       rest of its batch), enforces a per-channel fixed-window rate limit in Redis

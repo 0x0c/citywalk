@@ -241,7 +241,38 @@ services later is cheap when the boundaries already exist and expensive when the
 - [ ] Unit 5 — The Kafka-compatible log and its consumer positions.
 - [ ] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
 - [ ] Unit 7 — Object storage with content-addressed asset URLs behind a delivery network.
-- [ ] Unit 8 — The PostgreSQL-backed job queue and 15-minute time-zone slots.
+- [x] Unit 8 — The PostgreSQL-backed job queue and 15-minute time-zone slots.
+      `internal/platform/jobqueue` builds and starts a `river` client against the existing `pgx/v5`
+      pool (`internal/platform/postgres`). `cmd/server/main.go` starts and stops that client
+      alongside the pool and the Redis client, the way it already owns every other platform
+      dependency's lifecycle. `river`'s own schema ships as two migrations,
+      `migrations/0011_job_queue.sql` and `migrations/0012_job_queue_pending_state.sql`. They are
+      two files, not one, because PostgreSQL refuses to use a `river_job_state` enum value inside the
+      same transaction that added it, and this repository's migration runner applies one file per
+      transaction; 0011's header explains the split in full. Three periodic jobs — `river`'s own
+      scheduler, not a hand-rolled ticker — run on the queue: CW-0005 Unit 6's membership
+      reconciliation, CW-0009 Unit 1's rollup recompute, and a proof-of-concept 15-minute
+      activation-slot tick. This unit names enqueuing a job inside the same transaction that saves
+      the definition triggering it as the reason for a PostgreSQL-backed queue, and that property
+      holds for any caller with a `pgx` transaction already open, since `river_job` is an ordinary
+      table a transaction can insert into like any other.
+
+      The 15-minute time-zone-slot mechanism (`internal/platform/jobqueue/tzslot.go`) buckets a
+      coordinated universal time (UTC) offset into one of 96 slots, including a 45-minute remainder,
+      and computes the UTC instant at which a slot's target local time falls. Tests cover every
+      offset boundary, the 45-minute offsets, day rollover, and the round trip between a slot and its
+      representative offset. A periodic `river` job (`ActivationSlotWorker` and
+      `ActivationSlotPeriodicJob`) fires every 15 minutes and logs the slot that elapsed, proving the
+      math drives a real job rather than only unit tests.
+
+      What this mechanism does not yet drive is real per-channel activation. No channel carries a
+      stored, queryable time-zone offset: `internal/channel/register.Register` writes "time zone"
+      into the `channels.attributes` JavaScript Object Notation (JSON) document under whatever key
+      the caller's request happens to use, with no registered attribute name, no dedicated column,
+      and no way to select channels by offset in structured query language (SQL). `ActivationSlotWorker`
+      is a placeholder for that reason, not because the slot math is unproven. Grouping real channels
+      by slot and enqueuing their activations needs a channel time-zone field first, which is
+      CW-0004's attribute registry's prerequisite to name, not this pass's to add.
 - [x] Unit 9 — Channel-bound device tokens, and identity-provider authentication with roles.
       `internal/platform/devicetoken` issues and verifies the device-bound token; ChannelService's
       Register and RefreshToken (`internal/channel/register`) hand it out; DeliveryService and

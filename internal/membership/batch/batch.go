@@ -24,21 +24,24 @@ import (
 	"github.com/0x0c/citywalk/internal/membership/segment"
 )
 
-// disagreementCounter records CW-0010 Unit 10's named membership-reconciliation-disagreement-count
-// metric, by segment: a segment whose index has quietly drifted from what its predicate actually
-// matches looks exactly like a segment nobody has qualified for lately, without this counter to
-// distinguish the two.
-var disagreementCounter = mustDisagreementCounter()
+// disagreementGauge records CW-0010 Unit 10's named membership-reconciliation-disagreement-count
+// metric (CW-0005 Unit 6): the count of channels whose recomputed membership disagreed with the live
+// index, per segment, as of the most recent recomputation. A gauge rather than a counter, since the
+// value is a snapshot of one run, not a running total — a disagreement that stops recurring should
+// make the metric read zero again, not stay inflated forever.
+var disagreementGauge = mustDisagreementGauge()
 
-func mustDisagreementCounter() metric.Int64Counter {
-	c, err := otel.Meter("citywalk/membership/batch").Int64Counter(
+func mustDisagreementGauge() metric.Int64Gauge {
+	g, err := otel.Meter("citywalk/membership/batch").Int64Gauge(
 		"citywalk.membership.reconciliation_disagreement_count",
-		metric.WithDescription("Count of channels whose segment membership disagreed with the reverse index immediately before a recomputation swap, by segment"),
+		metric.WithDescription("Channels whose recomputed segment membership disagreed with the live index as of the most recent recomputation, by segment"),
 	)
 	if err != nil {
+		// Int64Gauge only fails on a malformed instrument name, which is fixed at compile time — a
+		// real failure here would mean this package itself is broken, not a runtime condition.
 		panic(err)
 	}
-	return c
+	return g
 }
 
 // Report summarizes one Recompute call: the generation it wrote, and — CW-0005 Unit 6's health
@@ -88,13 +91,11 @@ func Recompute(ctx context.Context, pool *pgxpool.Pool, redisClient *redis.Clien
 		if err != nil {
 			return Report{}, fmt.Errorf("batch: read prior bitmap for segment %s: %w", seg.ID, err)
 		}
-		disagreement := int(roaring.Xor(oldBM, newBM).GetCardinality())
-		disagreements[seg.ID] = disagreement
-		if disagreement > 0 {
-			disagreementCounter.Add(ctx, int64(disagreement), metric.WithAttributes(
-				attribute.String("citywalk.membership.segment_id", seg.ID),
-			))
-		}
+		disagreementCount := int(roaring.Xor(oldBM, newBM).GetCardinality())
+		disagreements[seg.ID] = disagreementCount
+		disagreementGauge.Record(ctx, int64(disagreementCount), metric.WithAttributes(
+			attribute.String("citywalk.membership.segment_id", seg.ID),
+		))
 		newBitmaps[seg.ID] = newBM
 
 		it := newBM.Iterator()

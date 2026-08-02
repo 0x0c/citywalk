@@ -15,10 +15,16 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/riverqueue/river"
 
+	"github.com/0x0c/citywalk/internal/audience/registry"
+	"github.com/0x0c/citywalk/internal/event/consumer"
+	"github.com/0x0c/citywalk/internal/governance/budget"
+	"github.com/0x0c/citywalk/internal/membership/batch"
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
 	"github.com/0x0c/citywalk/internal/platform/config"
 	"github.com/0x0c/citywalk/internal/platform/connectserver"
+	"github.com/0x0c/citywalk/internal/platform/jobqueue"
 	"github.com/0x0c/citywalk/internal/platform/observability"
 	"github.com/0x0c/citywalk/internal/platform/postgres"
 	"github.com/0x0c/citywalk/internal/platform/redisclient"
@@ -84,6 +90,57 @@ func run(logger *slog.Logger) error {
 		logger.Info("redis ready")
 	} else {
 		logger.Warn("CITYWALK_REDIS_ADDR not set, running without redis")
+	}
+
+	if pool != nil {
+		// CW-0010 Unit 8: the job queue backs three periodic jobs. CW-0005 Unit 6's membership
+		// reconciliation and CW-0010 Unit 8's own activation-slot proof only need pool; CW-0009 Unit
+		// 1's rollup recompute additionally records impressions against the project budget when Redis
+		// is configured, mirroring how connectserver's EventServer treats Redis as optional.
+		//
+		// registry.New() with no definitions is a placeholder: CW-0004's attribute registry has no
+		// production construction path yet (no attribute definition is sourced from anywhere outside
+		// a test fixture), and neither does segment creation (no AdminService RPC creates one), so a
+		// fresh deployment always reconciles zero segments regardless of what the registry contains.
+		// Wiring a real registry here is CW-0004's prerequisite work, not this pass's.
+		reg, err := registry.New()
+		if err != nil {
+			return fmt.Errorf("build placeholder attribute registry: %w", err)
+		}
+
+		var budgetCounter *budget.Counter
+		if redisClient != nil {
+			budgetCounter = &budget.Counter{Redis: redisClient, Window: 24 * time.Hour}
+		}
+
+		workers := river.NewWorkers()
+		river.AddWorker(workers, &batch.ReconcileWorker{Pool: pool, Redis: redisClient, Registry: reg})
+		river.AddWorker(workers, &consumer.RollupRecomputeWorker{Pool: pool, BudgetCounter: budgetCounter})
+		river.AddWorker(workers, &jobqueue.ActivationSlotWorker{Logger: logger})
+
+		periodicJobs := []*river.PeriodicJob{
+			batch.ReconcilePeriodicJob(),
+			consumer.RollupRecomputePeriodicJob(),
+			jobqueue.ActivationSlotPeriodicJob(),
+		}
+
+		jobClient, err := jobqueue.New(pool, workers, periodicJobs, logger)
+		if err != nil {
+			return fmt.Errorf("build job queue client: %w", err)
+		}
+		if err := jobClient.Start(ctx); err != nil {
+			return fmt.Errorf("start job queue client: %w", err)
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := jobClient.Stop(shutdownCtx); err != nil {
+				logger.Error("job queue client stop failed", slog.Any("error", err))
+			}
+		}()
+		logger.Info("job queue ready")
+	} else {
+		logger.Warn("CITYWALK_POSTGRES_DSN not set, running without the job queue (CW-0010 Unit 8)")
 	}
 
 	var adminAuthenticator adminauth.Authenticator
