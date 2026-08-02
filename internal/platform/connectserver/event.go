@@ -37,6 +37,10 @@ func (s EventServer) Submit(
 	if s.Redis == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("submit requires redis, which this process was started without"))
 	}
+	channelID, err := requireChannelID(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	events := make([]eventmodel.Event, len(req.Msg.GetEvents()))
 	for i, wire := range req.Msg.GetEvents() {
@@ -44,12 +48,18 @@ func (s EventServer) Submit(
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
+		// The authenticated channel identity wins over whatever the wire event claims — CW-0010
+		// Unit 9's "naming another channel's identifier grants nothing" applies per event, not just
+		// to the batch-level field, since ingest.Accept itself requires every event in a batch to
+		// share one channel_id and would otherwise reject a batch whose per-event value disagreed
+		// with the (now ignored) request-level one.
+		e.ChannelID = channelID
 		events[i] = e
 	}
 
 	limiter := defaultRateLimit
 	limiter.Redis = s.Redis
-	result, err := ingest.Accept(ctx, s.Pool, limiter, req.Msg.GetChannelId(), events, time.Now())
+	result, err := ingest.Accept(ctx, s.Pool, limiter, channelID, events, time.Now())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

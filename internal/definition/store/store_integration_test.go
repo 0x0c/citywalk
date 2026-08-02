@@ -193,7 +193,7 @@ func TestUpdateStateAppliesAnAllowedTransitionAndRecordsAuditLog(t *testing.T) {
 
 	messageID := insertDraftMessage(t, ctx, pool, now)
 
-	if err := store.UpdateState(ctx, pool, messageID, model.MessageStatePaused, now); err != nil {
+	if err := store.UpdateState(ctx, pool, messageID, model.MessageStatePaused, "alice", now); err != nil {
 		t.Fatalf("UpdateState: %v", err)
 	}
 
@@ -215,6 +215,9 @@ func TestUpdateStateAppliesAnAllowedTransitionAndRecordsAuditLog(t *testing.T) {
 	if entries[0].FromState != model.MessageStateActive || entries[0].ToState != model.MessageStatePaused {
 		t.Errorf("entries[0] = %+v, want active -> paused", entries[0])
 	}
+	if entries[0].Actor != "alice" {
+		t.Errorf("entries[0].Actor = %q, want %q", entries[0].Actor, "alice")
+	}
 	if !entries[0].OccurredAt.Equal(now) {
 		t.Errorf("entries[0].OccurredAt = %v, want %v", entries[0].OccurredAt, now)
 	}
@@ -229,7 +232,7 @@ func TestUpdateStateRejectsABackwardTransition(t *testing.T) {
 
 	messageID := insertDraftMessage(t, ctx, pool, now)
 
-	if err := store.UpdateState(ctx, pool, messageID, model.MessageStateDraft, now); err == nil {
+	if err := store.UpdateState(ctx, pool, messageID, model.MessageStateDraft, "alice", now); err == nil {
 		t.Fatal("UpdateState: got nil error moving active -> draft, want an error")
 	}
 
@@ -255,7 +258,7 @@ func TestUpdateStateOnUnknownMessage(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 
-	err := store.UpdateState(ctx, pool, "00000000-0000-0000-0000-000000000000", model.MessageStatePaused, time.Now())
+	err := store.UpdateState(ctx, pool, "00000000-0000-0000-0000-000000000000", model.MessageStatePaused, "alice", time.Now())
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("UpdateState: err = %v, want it to wrap store.ErrNotFound", err)
 	}

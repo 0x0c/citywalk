@@ -1,6 +1,7 @@
 package validate_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func validMessage(now time.Time) model.Message {
 
 func TestValidateAcceptsAWellFormedMessage(t *testing.T) {
 	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	if err := validate.Validate(validMessage(now), now); err != nil {
+	if err := validate.Validate(context.Background(), nil, validMessage(now), now); err != nil {
 		t.Fatalf("Validate: %v, want nil", err)
 	}
 }
@@ -48,7 +49,7 @@ func TestValidateRejectsWindowEndBeforeStart(t *testing.T) {
 	msg := validMessage(now)
 	msg.Window = model.Window{Start: now.Add(2 * time.Hour), End: now.Add(time.Hour)}
 
-	err := validate.Validate(msg, now)
+	err := validate.Validate(context.Background(), nil, msg, now)
 	if err == nil {
 		t.Fatal("Validate: got nil error, want a temporal sanity error")
 	}
@@ -62,7 +63,7 @@ func TestValidateRejectsWindowEndInThePast(t *testing.T) {
 	msg := validMessage(now)
 	msg.Window = model.Window{Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)}
 
-	err := validate.Validate(msg, now)
+	err := validate.Validate(context.Background(), nil, msg, now)
 	if err == nil {
 		t.Fatal("Validate: got nil error, want a temporal sanity error")
 	}
@@ -76,7 +77,7 @@ func TestValidateRejectsVariantWeightsNotSummingTo100(t *testing.T) {
 	msg := validMessage(now)
 	msg.Variants[0].Weight = 60
 
-	err := validate.Validate(msg, now)
+	err := validate.Validate(context.Background(), nil, msg, now)
 	if err == nil {
 		t.Fatal("Validate: got nil error, want a variant weight error")
 	}
@@ -97,7 +98,7 @@ func TestValidateAcceptsIndependentWeightTotalsPerLanguage(t *testing.T) {
 			Content: model.DialogContent{}},
 	}
 
-	if err := validate.Validate(msg, now); err != nil {
+	if err := validate.Validate(context.Background(), nil, msg, now); err != nil {
 		t.Fatalf("Validate: %v, want nil", err)
 	}
 }
@@ -107,7 +108,7 @@ func TestValidateRejectsUnsupportedSchemaMajor(t *testing.T) {
 	msg := validMessage(now)
 	msg.Variants[0].SchemaVersion = model.SchemaVersion{Major: model.CurrentMajor + 1}
 
-	err := validate.Validate(msg, now)
+	err := validate.Validate(context.Background(), nil, msg, now)
 	if err == nil {
 		t.Fatal("Validate: got nil error, want a schema version error")
 	}
@@ -129,7 +130,7 @@ func TestValidateRejectsDisallowedLinkScheme(t *testing.T) {
 		},
 	}
 
-	err := validate.Validate(msg, now)
+	err := validate.Validate(context.Background(), nil, msg, now)
 	if err == nil {
 		t.Fatal("Validate: got nil error, want a content security error")
 	}
@@ -143,7 +144,7 @@ func TestValidateRejectsExecutableSchemeInHTMLContent(t *testing.T) {
 	msg := validMessage(now)
 	msg.Variants[0].Content = model.HTMLContent{HTML: `<a href="JavaScript:alert(1)">click</a>`}
 
-	err := validate.Validate(msg, now)
+	err := validate.Validate(context.Background(), nil, msg, now)
 	if err == nil {
 		t.Fatal("Validate: got nil error, want a content security error")
 	}
@@ -169,7 +170,7 @@ func TestValidateChecksButtonsInsideSequenceSteps(t *testing.T) {
 		},
 	}
 
-	err := validate.Validate(msg, now)
+	err := validate.Validate(context.Background(), nil, msg, now)
 	if err == nil {
 		t.Fatal("Validate: got nil error, want a content security error from the sequence step")
 	}

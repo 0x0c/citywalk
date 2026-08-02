@@ -333,10 +333,133 @@ func TestBuildExcludesAMessageWhenTheChannelLandsInItsHoldout(t *testing.T) {
 	}
 }
 
+// TestBuildEmitsAHoldoutQualifiedEventWhenTheChannelLandsInItsHoldout is CW-0008 Unit 5 wired into
+// the live delivery path: a channel excluded by its own message's holdout is not just silently
+// dropped from the payload — it leaves a KindHoldoutQualified row behind, the denominator the
+// counterfactual comparison a holdout exists for needs.
+func TestBuildEmitsAHoldoutQualifiedEventWhenTheChannelLandsInItsHoldout(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	channelID := insertChannel(t, ctx, pool, map[string]any{"country": "JP"})
+
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	seg, err := segment.Save(ctx, pool, env, reg, "Japan", `country == "JP"`)
+	if err != nil {
+		t.Fatalf("segment.Save: %v", err)
+	}
+
+	msg := &model.Message{
+		Name: "Fully held out", State: model.MessageStateActive,
+		Window:          model.Window{Start: now.Add(-time.Hour), End: now.Add(time.Hour)},
+		AudienceRef:     seg.ID,
+		HoldoutFraction: 1.0,
+		Variants: []model.Variant{{
+			Weight: 100, Language: "en", SchemaVersion: model.SchemaVersion{Major: model.CurrentMajor},
+			Content: model.DialogContent{},
+		}},
+	}
+	if err := store.InsertMessage(ctx, pool, msg); err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	if _, err := batch.Recompute(ctx, pool, redisClient, reg); err != nil {
+		t.Fatalf("batch.Recompute: %v", err)
+	}
+
+	p, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(p.Entries) != 0 {
+		t.Errorf("len(Entries) = %d, want 0 (message is 100%% held out)", len(p.Entries))
+	}
+
+	var count int
+	err = pool.QueryRow(ctx,
+		`SELECT count(*) FROM events_log WHERE channel_id = $1 AND kind = 'holdout_qualified' AND message_id = $2`,
+		channelID, msg.ID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query events_log: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("holdout_qualified event count = %d, want 1", count)
+	}
+}
+
+// TestBuildExcludesAMessageWithNoVariantSupportingTheChannelsDeclaredSchemaMajor is CW-0003 Unit 4's
+// compatibility check wired into the live delivery path: "each device receives the highest version
+// its SDK declares support for" means a device that declared a schema major no variant on an
+// otherwise-eligible message carries gets no entry for it at all, the same as a channel that never
+// qualified.
+func TestBuildExcludesAMessageWithNoVariantSupportingTheChannelsDeclaredSchemaMajor(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	// A channel that declared support for a schema major no persisted variant carries (every variant
+	// in this pass is model.CurrentMajor, since save-time validation admits nothing else).
+	channelID := insertChannelWithSchemaMajor(t, ctx, pool, map[string]any{"country": "JP"}, model.CurrentMajor+1)
+
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	seg, err := segment.Save(ctx, pool, env, reg, "Japan", `country == "JP"`)
+	if err != nil {
+		t.Fatalf("segment.Save: %v", err)
+	}
+
+	msg := &model.Message{
+		Name: "Incompatible schema major", State: model.MessageStateActive,
+		Window:      model.Window{Start: now.Add(-time.Hour), End: now.Add(time.Hour)},
+		AudienceRef: seg.ID,
+		Variants: []model.Variant{{
+			Weight: 100, Language: "en", SchemaVersion: model.SchemaVersion{Major: model.CurrentMajor},
+			Content: model.DialogContent{},
+		}},
+	}
+	if err := store.InsertMessage(ctx, pool, msg); err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	if _, err := batch.Recompute(ctx, pool, redisClient, reg); err != nil {
+		t.Fatalf("batch.Recompute: %v", err)
+	}
+
+	p, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(p.Entries) != 0 {
+		t.Errorf("len(Entries) = %d, want 0 (no variant supports this channel's declared schema major)", len(p.Entries))
+	}
+}
+
 func insertChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attrs map[string]any) string {
 	t.Helper()
 	var id string
 	if err := pool.QueryRow(ctx, `INSERT INTO channels (attributes) VALUES ($1) RETURNING id`, attrs).Scan(&id); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+	if _, err := ordinal.Allocate(ctx, pool, id); err != nil {
+		t.Fatalf("allocate ordinal: %v", err)
+	}
+	return id
+}
+
+func insertChannelWithSchemaMajor(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attrs map[string]any, supportedSchemaMajor int) string {
+	t.Helper()
+	var id string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO channels (attributes, supported_schema_major) VALUES ($1, $2) RETURNING id`,
+		attrs, supportedSchemaMajor,
+	).Scan(&id); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 	if _, err := ordinal.Allocate(ctx, pool, id); err != nil {

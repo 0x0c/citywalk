@@ -158,14 +158,19 @@ split, which is why it is a separate item rather than a paragraph here.
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — Definition service: schema, administrative API, validation, audit log, kill switch.
-      CW-0003's schema, save-time validation, and a minimal insert/get store exist and are tested.
-      The kill switch and its audit log are also implemented and tested now: `store.UpdateState`
-      moves a message between states only along FR-MSG-01's forward-only transitions
-      (`MessageState.CanTransition`, itself newly tested), and records every successful move in
-      `message_audit_log`, which `store.ListAuditLog` reads back. Still missing: a network-facing
-      administrative API (authentication, and the rest of the create/update/delete/publish surface —
-      today's store package is a persistence layer a future API would call, not the API itself).
+- [x] Unit 1 — Definition service: schema, administrative API, validation, audit log, kill switch.
+      CW-0003's schema, save-time validation, and the insert/get store are implemented and tested.
+      The kill switch and its audit log are implemented and tested: `store.UpdateState` moves a
+      message between states only along FR-MSG-01's forward-only transitions
+      (`MessageState.CanTransition`), and records every successful move — naming the state change and
+      the authenticated actor that requested it (CW-0010 Unit 9) — in `message_audit_log`, which
+      `store.ListAuditLog` reads back. The network-facing administrative API now exists: AdminService
+      (`internal/platform/connectserver/admin.go`) serves CreateMessage, UpdateMessageState,
+      GetMessage, and ListAuditLog over Connect-RPC, authenticated and role-checked by CW-0010 Unit
+      9's `adminAuthInterceptor` (mutations require at least editor, reads at least viewer). A message
+      is archived rather than deleted (`MessageStateArchived`, reachable through UpdateMessageState),
+      matching the "publish a new version instead of mutating one" rule this unit's own design states
+      — there is no endpoint to edit a draft's content in place once created.
 - [ ] Unit 2 — Audience service: predicate evaluation and segment membership.
       CW-0004's predicate language and evaluator and CW-0005's membership index are both implemented
       and tested; a channel's eligible set resolves end to end through the reverse index CW-0002's

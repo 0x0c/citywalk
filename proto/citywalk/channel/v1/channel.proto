@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package citywalk.channel.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/0x0c/citywalk/gen/citywalk/channel/v1;channelv1";
+
+// ChannelService implements FR-API-01 and CW-0010 Unit 9's device-bound credential half: a device
+// registers once and receives a channel identifier, a long-lived registration credential, and an
+// immediately usable short-lived access token, then renews the access token against that credential
+// thereafter without registering again.
+service ChannelService {
+  // Register creates a new channel and issues its first credential and access token.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // RefreshToken exchanges a channel's registration credential for a fresh access token.
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+}
+
+message RegisterRequest {
+  // attributes_json carries the channel_field-sourced attributes CW-0004's registry declares
+  // (locale, time zone, application version, notification permission, and so on) as a JSON document
+  // — the same shape channels.attributes stores. FR-API-01's fixed field list is deliberately not
+  // broken out into individual proto fields: the registry (configuration, not a migration) decides
+  // which attributes exist, and a fixed proto schema would put a schema change behind every new one
+  // — the same reasoning migrations/0003_audience_channels.sql gives for using jsonb over columns.
+  bytes attributes_json = 1;
+  // supported_schema_major is CW-0003 Unit 4: the content schema major version this device's SDK can
+  // render.
+  int32 supported_schema_major = 2;
+}
+
+message RegisterResponse {
+  string channel_id = 1;
+  // credential is returned exactly once, at registration. The SDK persists it and never sees it
+  // again — RefreshToken returns only a new access token, never the credential itself.
+  string credential = 2;
+  string access_token = 3;
+  google.protobuf.Timestamp access_token_expires_at = 4;
+}
+
+message RefreshTokenRequest {
+  string channel_id = 1;
+  string credential = 2;
+}
+
+message RefreshTokenResponse {
+  string access_token = 1;
+  google.protobuf.Timestamp access_token_expires_at = 2;
+}

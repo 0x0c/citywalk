@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/0x0c/citywalk/internal/platform/adminauth"
 	"github.com/0x0c/citywalk/internal/platform/config"
 	"github.com/0x0c/citywalk/internal/platform/connectserver"
 	"github.com/0x0c/citywalk/internal/platform/observability"
@@ -85,7 +86,17 @@ func run(logger *slog.Logger) error {
 		logger.Warn("CITYWALK_REDIS_ADDR not set, running without redis")
 	}
 
-	mux, err := connectserver.NewMux(pool, redisClient)
+	var adminAuthenticator adminauth.Authenticator
+	if len(cfg.AdminKeys) > 0 {
+		adminAuthenticator = adminauth.StaticKeyAuthenticator{Keys: cfg.AdminKeys}
+	} else {
+		logger.Warn("CITYWALK_ADMIN_API_KEYS not set, running without AdminService")
+	}
+	if len(cfg.TokenSigningKey) == 0 {
+		logger.Warn("CITYWALK_TOKEN_SIGNING_KEY not set, running without ChannelService, DeliveryService, or EventService")
+	}
+
+	mux, err := connectserver.NewMux(pool, redisClient, cfg.TokenSigningKey, adminAuthenticator)
 	if err != nil {
 		return fmt.Errorf("build connect mux: %w", err)
 	}

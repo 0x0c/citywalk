@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
@@ -21,6 +22,8 @@ import (
 	"github.com/0x0c/citywalk/internal/definition/model"
 	"github.com/0x0c/citywalk/internal/definition/store"
 	deliverysync "github.com/0x0c/citywalk/internal/delivery/sync"
+	"github.com/0x0c/citywalk/internal/event/ingest"
+	eventmodel "github.com/0x0c/citywalk/internal/event/model"
 	"github.com/0x0c/citywalk/internal/experiment/assign"
 	"github.com/0x0c/citywalk/internal/membership/reverse"
 )
@@ -109,19 +112,26 @@ func Build(
 		return Payload{}, err
 	}
 
+	declaredMajor, err := supportedSchemaMajor(ctx, pool, channelID)
+	if err != nil {
+		return Payload{}, err
+	}
+
 	var entries []Entry
 	for _, id := range messageIDs {
 		msg, err := store.GetMessage(ctx, pool, id)
 		if err != nil {
 			return Payload{}, fmt.Errorf("payload: load message %s: %w", id, err)
 		}
-		entry, included, err := buildEntry(msg, language, channelID)
+		entry, included, err := buildEntry(ctx, pool, msg, language, channelID, declaredMajor, now)
 		if err != nil {
 			return Payload{}, fmt.Errorf("payload: build entry for message %s: %w", id, err)
 		}
 		if !included {
-			// channelID landed in msg's own holdout (CW-0008 Unit 4): eligible in every respect, but
-			// receives no content, exactly like a channel that never qualified at all.
+			// Either channelID landed in msg's own holdout (CW-0008 Unit 4), or msg carries no variant
+			// whose schema major the channel declared support for at registration (CW-0003 Unit 4).
+			// Both leave the channel eligible in every other respect but receiving no content, exactly
+			// like a channel that never qualified at all.
 			continue
 		}
 		entries = append(entries, entry)
@@ -140,25 +150,39 @@ func Build(
 	return Payload{Entries: entries, NextSyncAt: nextSync}, nil
 }
 
-// buildEntry projects msg onto the device-safe Entry shape, selecting msg's variant by language
-// first and then by CW-0008's deterministic experiment assignment among that language's variants —
-// CW-0003 Unit 1's full two-step selection rule. included is false when identity landed in msg's own
-// holdout (CW-0008 Unit 4): eligible in every respect, but the caller must not include an entry for
-// it. When no variant matches language at all, buildEntry falls back to msg's first variant with no
-// assignment and no holdout — the safety net this path has always had for a campaign with no content
-// in the device's language.
-func buildEntry(msg model.Message, language, identity string) (Entry, bool, error) {
+// buildEntry projects msg onto the device-safe Entry shape, first narrowing to the variants whose
+// schema major the channel declared support for at registration (CW-0003 Unit 4: "each device
+// receives the highest version its SDK declares support for"), then selecting among those by
+// language and finally by CW-0008's deterministic experiment assignment — CW-0003 Unit 1's full
+// selection rule. included is false either when msg carries no variant compatible with
+// declaredMajor at all, or when identity landed in msg's own holdout (CW-0008 Unit 4): eligible in
+// every respect, but the caller must not include an entry for it. The holdout case is the only one
+// CW-0008 Unit 5 requires a record for — a schema-major mismatch is a compatibility gap the SDK, not
+// the server, is positioned to report (docs/requirements.md places SDK behavior out of this
+// repository's scope) — so buildEntry emits a KindHoldoutQualified event only for that case. When no
+// compatible variant matches language, buildEntry falls back to the first compatible variant with no
+// assignment and no holdout — the same safety net this path has always had for a campaign with no
+// content in the device's language.
+func buildEntry(ctx context.Context, pool *pgxpool.Pool, msg model.Message, language, identity string, declaredMajor int, now time.Time) (Entry, bool, error) {
 	if len(msg.Variants) == 0 {
 		return Entry{}, false, fmt.Errorf("message has no variants")
 	}
 
-	variant := msg.Variants[0]
-	if languageVariants := variantsForLanguage(msg.Variants, language); len(languageVariants) > 0 {
+	compatibleVariants := variantsSupportingMajor(msg.Variants, declaredMajor)
+	if len(compatibleVariants) == 0 {
+		return Entry{}, false, nil
+	}
+
+	variant := compatibleVariants[0]
+	if languageVariants := variantsForLanguage(compatibleVariants, language); len(languageVariants) > 0 {
 		selected, isHoldout, err := assignVariant(msg, languageVariants, identity)
 		if err != nil {
 			return Entry{}, false, err
 		}
 		if isHoldout {
+			if err := recordHoldoutQualified(ctx, pool, msg, identity, now); err != nil {
+				return Entry{}, false, err
+			}
 			return Entry{}, false, nil
 		}
 		variant = selected
@@ -181,6 +205,46 @@ func buildEntry(msg model.Message, language, identity string) (Entry, bool, erro
 		ControlPolicy:     msg.ControlPolicy,
 		ExpiresAt:         msg.Window.End,
 	}, true, nil
+}
+
+// recordHoldoutQualified emits CW-0008 Unit 5's counterfactual record: identity qualified for msg but
+// was withheld, so the comparison a holdout exists for has a denominator. Both identity (as
+// ChannelID) and msg.ID are already known to reference live rows by the time buildEntry runs, so a
+// failure here — unlike the exclusion itself — is a real error rather than something to swallow.
+func recordHoldoutQualified(ctx context.Context, pool *pgxpool.Pool, msg model.Message, identity string, now time.Time) error {
+	event := eventmodel.Event{
+		ID:         uuid.NewString(),
+		ChannelID:  identity,
+		Kind:       eventmodel.KindHoldoutQualified,
+		DeviceTime: now,
+		MessageID:  msg.ID,
+	}
+	if err := ingest.Record(ctx, pool, event, now); err != nil {
+		return fmt.Errorf("payload: record holdout qualified for message %s: %w", msg.ID, err)
+	}
+	return nil
+}
+
+// variantsSupportingMajor returns every variant in variants whose SchemaVersion.SupportsMajor
+// reports true for declaredMajor (CW-0003 Unit 4).
+func variantsSupportingMajor(variants []model.Variant, declaredMajor int) []model.Variant {
+	var out []model.Variant
+	for _, v := range variants {
+		if v.SchemaVersion.SupportsMajor(declaredMajor) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// supportedSchemaMajor reads back the schema major channelID declared support for at registration
+// (CW-0010 Unit 9's Register, CW-0003 Unit 4).
+func supportedSchemaMajor(ctx context.Context, pool *pgxpool.Pool, channelID string) (int, error) {
+	var major int
+	if err := pool.QueryRow(ctx, `SELECT supported_schema_major FROM channels WHERE id = $1`, channelID).Scan(&major); err != nil {
+		return 0, fmt.Errorf("payload: read supported_schema_major for channel %s: %w", channelID, err)
+	}
+	return major, nil
 }
 
 // variantsForLanguage returns every variant in variants matching language, in no particular order.

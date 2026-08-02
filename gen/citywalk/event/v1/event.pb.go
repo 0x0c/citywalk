@@ -27,9 +27,12 @@ const (
 // property set is open-ended application data the server never queries by key, only stores and
 // hands back, so a native message adds a codec round trip for no gain.
 type Event struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	ChannelId string                 `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// channel_id is accepted for the wire shape but never trusted: EventServer.Submit overwrites it
+	// with CW-0010 Unit 9's authenticated channel identity before this event ever reaches
+	// ingest.Accept, the same as SubmitRequest.channel_id below.
+	ChannelId string `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
 	// kind is one of model.Kind's closed set (e.g. "impression", "custom").
 	Kind string `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
 	// name is the application-defined event name, required when kind is "custom".
@@ -141,9 +144,9 @@ func (x *Event) GetSuppressionReason() string {
 
 type SubmitRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// channel_id is declared for the wire shape; see DeliveryService's ConfirmRequest for why no
-	// handler should trust it over token-derived identity once CW-0010 Unit 9 exists. Every event in
-	// events must carry this same channel_id.
+	// channel_id is accepted for the wire shape but never trusted: CW-0010 Unit 9's device auth
+	// interceptor binds the caller's channel identity to its verified bearer token, and the handler
+	// acts on that identity regardless of what channel_id names here.
 	ChannelId     string   `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
 	Events        []*Event `protobuf:"bytes,2,rep,name=events,proto3" json:"events,omitempty"`
 	unknownFields protoimpl.UnknownFields

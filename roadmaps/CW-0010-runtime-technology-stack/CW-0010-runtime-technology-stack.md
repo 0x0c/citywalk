@@ -242,7 +242,17 @@ services later is cheap when the boundaries already exist and expensive when the
 - [ ] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
 - [ ] Unit 7 — Object storage with content-addressed asset URLs behind a delivery network.
 - [ ] Unit 8 — The PostgreSQL-backed job queue and 15-minute time-zone slots.
-- [ ] Unit 9 — Channel-bound device tokens, and identity-provider authentication with roles.
+- [x] Unit 9 — Channel-bound device tokens, and identity-provider authentication with roles.
+      `internal/platform/devicetoken` issues and verifies the device-bound token; ChannelService's
+      Register and RefreshToken (`internal/channel/register`) hand it out; DeliveryService and
+      EventService are behind an interceptor that rejects a missing or invalid token and binds every
+      request to the token's channel identity, never a request field. The administrative half
+      (`internal/platform/adminauth`) authorizes by role (viewer, editor, administrator) behind
+      AdminService, with every mutation recorded in `message_audit_log` naming the actor. The real
+      external identity-provider integration needs that provider's own configuration (issuer,
+      JSON Web Key Set (JWKS) endpoint, client id), which this repository has no access to; a
+      `StaticKeyAuthenticator` stands in behind the same `Authenticator` interface a real verifier
+      would implement, so swapping it in later touches no caller.
 - [ ] Unit 10 — OpenTelemetry signals plus the four platform-specific metrics.
 - [ ] Unit 11 — Phase one as a single process; log and columnar store in phase two.
 

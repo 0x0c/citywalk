@@ -24,8 +24,10 @@ const (
 
 type SyncRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// channel_id is declared for the wire shape; see ConfirmRequest's note on why no handler should
-	// trust it over token-derived identity once CW-0010 Unit 9 exists.
+	// channel_id is accepted for the wire shape but never trusted: CW-0010 Unit 9's device auth
+	// interceptor binds the caller's channel identity to its verified bearer token, and the handler
+	// acts on that identity regardless of what channel_id names here — naming another channel's
+	// identifier grants nothing.
 	ChannelId string `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
 	Language  string `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
 	// etag is the tag the device's current payload was served with, empty on first synchronization.
@@ -297,10 +299,9 @@ func (x *SyncResponse) GetProjectBudgetRemaining() int32 {
 
 type ConfirmRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// channel_id is declared for FR-API-08's wire shape, but no handler should ever trust it: CW-0010
-	// Unit 9 binds the channel identity to the authenticated request's token and ignores whatever a
-	// request names here. Channel authentication isn't built yet, so today's handler has no channel
-	// identity to check confirm.Confirm's result against at all, and does not read this field.
+	// channel_id is accepted for FR-API-08's wire shape but never trusted: CW-0010 Unit 9's device
+	// auth interceptor binds the channel identity to the authenticated request's token, and
+	// checkProjectBudget uses that identity, not whatever this field names.
 	ChannelId     string `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
 	MessageId     string `protobuf:"bytes,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
 	unknownFields protoimpl.UnknownFields

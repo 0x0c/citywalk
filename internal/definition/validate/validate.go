@@ -2,19 +2,23 @@
 // a malformed Message rather than warning about it, because a rejection at save reaches the person
 // who can fix it while a rejection at delivery reaches a device and nobody at all.
 //
-// Referential integrity — confirming the referenced segment, conversion event, and media actually
-// exist — is not implemented here. Segments are CW-0004/CW-0005's audience service, the conversion
-// event catalog has no owner yet, and media existence depends on the object storage CW-0010 Unit 7
-// defers to a later phase; none of those exist as queryable stores yet. Validate covers everything
-// this pass can check on its own: structural shape (enforced by model's typed decode), temporal
-// sanity, variant weights, and content security.
+// Referential integrity now covers the one reference with a queryable store behind it: a non-empty
+// AudienceRef must name a real row in segments (CW-0004/CW-0005's audience service). The conversion
+// event catalog and media existence are still not checked — the conversion event catalog has no
+// owner yet, and media existence depends on the object storage CW-0010 Unit 7 defers to a later
+// phase, so neither exists as a queryable store yet. Validate otherwise covers everything this pass
+// can check on its own: structural shape (enforced by model's typed decode), temporal sanity,
+// variant weights, and content security.
 package validate
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/0x0c/citywalk/internal/definition/model"
 )
@@ -36,8 +40,9 @@ var forbiddenHTMLSchemes = []string{
 
 // Validate runs every save-time check this pass implements against msg, evaluated as of now, and
 // returns a joined error naming every violation found — the caller decides how to surface that to
-// the campaign author, but Validate itself never returns a partial pass.
-func Validate(msg model.Message, now time.Time) error {
+// the campaign author, but Validate itself never returns a partial pass. pool is used only for the
+// referential integrity check (AudienceRef existence); every other check is pure.
+func Validate(ctx context.Context, pool *pgxpool.Pool, msg model.Message, now time.Time) error {
 	var errs []error
 
 	if err := validateTemporalSanity(msg.Window, now); err != nil {
@@ -54,8 +59,31 @@ func Validate(msg model.Message, now time.Time) error {
 			errs = append(errs, err)
 		}
 	}
+	if err := validateAudienceRef(ctx, pool, msg.AudienceRef); err != nil {
+		errs = append(errs, err)
+	}
 
 	return errors.Join(errs...)
+}
+
+// validateAudienceRef rejects a non-empty AudienceRef that names no row in segments. An empty
+// AudienceRef is not itself a validation failure here — a message reaching everyone (no segment
+// restriction) is a legitimate, if unusual, thing to save; whether that's allowed is a policy
+// decision for whatever calls Validate, not this function's to make.
+func validateAudienceRef(ctx context.Context, pool *pgxpool.Pool, audienceRef string) error {
+	if audienceRef == "" {
+		return nil
+	}
+	var exists bool
+	// SELECT EXISTS always returns exactly one row, so the only error QueryRow can produce here is a
+	// real query failure — never pgx.ErrNoRows.
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM segments WHERE id = $1)`, audienceRef).Scan(&exists); err != nil {
+		return fmt.Errorf("check audience_ref %q: %w", audienceRef, err)
+	}
+	if !exists {
+		return fmt.Errorf("audience_ref %q does not name an existing segment", audienceRef)
+	}
+	return nil
 }
 
 // validateTemporalSanity checks the window's start precedes its end, and the end is in the future —

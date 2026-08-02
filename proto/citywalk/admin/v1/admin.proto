@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package citywalk.admin.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/0x0c/citywalk/gen/citywalk/admin/v1;adminv1";
+
+// AdminService is CW-0001 Unit 1's administrative surface: the network-facing API a campaign author
+// drives, authenticated through CW-0010 Unit 9's identity-provider half and authorized by role.
+// Every mutation is recorded in message_audit_log naming the actor, the target, and the change (see
+// store.ListAuditLog) — the authenticated principal's subject is what "the actor" resolves to.
+service AdminService {
+  // CreateMessage validates (CW-0003 Unit 5's save-time validation) and persists a new message
+  // definition. Requires at least the editor role.
+  rpc CreateMessage(CreateMessageRequest) returns (CreateMessageResponse);
+  // UpdateMessageState is CW-0001 Unit 1's kill switch: moves a message along FR-MSG-01's
+  // forward-only state transitions. Requires at least the editor role.
+  rpc UpdateMessageState(UpdateMessageStateRequest) returns (UpdateMessageStateResponse);
+  // GetMessage reads one message definition back. Requires at least the viewer role.
+  rpc GetMessage(GetMessageRequest) returns (GetMessageResponse);
+  // ListAuditLog reads a message's state-transition history, most recent first. Requires at least
+  // the viewer role.
+  rpc ListAuditLog(ListAuditLogRequest) returns (ListAuditLogResponse);
+}
+
+// MessageDefinition is the wire projection of internal/definition/model.Message.
+// control_policy_json, triggers_json, display_conditions_json, and variants_json carry those nested
+// entities as JSON documents rather than native proto messages — the same encoding
+// internal/platform/connectserver/delivery.go's wireEntries already uses for the device-facing wire
+// format, and CW-0003's own Variant.MarshalContentColumn uses for a variant's tagged-union content —
+// an administrative client (not yet built in this repository) decodes them the same way a device
+// decodes a delivered payload.
+message MessageDefinition {
+  // id is empty on a CreateMessage request (the server assigns it) and always set on a response.
+  string id = 1;
+  string name = 2;
+  // state is one of model.MessageState's values ("draft", "scheduled", "active", "paused",
+  // "completed", "archived"). CreateMessage always creates in "draft"; use UpdateMessageState to
+  // move it from there.
+  string state = 3;
+  int32 priority = 4;
+  google.protobuf.Timestamp window_start = 5;
+  google.protobuf.Timestamp window_end = 6;
+  string audience_ref = 7;
+  double holdout_fraction = 8;
+  string conversion_event = 9;
+  // version and experiment_salt are server-assigned and read-only; a CreateMessage request ignores
+  // whatever a caller sets here.
+  int32 version = 10;
+  string experiment_salt = 11;
+
+  bytes control_policy_json = 12;
+  bytes triggers_json = 13;
+  bytes display_conditions_json = 14;
+  bytes variants_json = 15;
+}
+
+message CreateMessageRequest {
+  MessageDefinition message = 1;
+}
+
+message CreateMessageResponse {
+  string message_id = 1;
+}
+
+message UpdateMessageStateRequest {
+  string message_id = 1;
+  // new_state must be a state message_id's current state can still reach under FR-MSG-01's
+  // forward-only rule (model.MessageState.CanTransition); anything else is rejected.
+  string new_state = 2;
+}
+
+message UpdateMessageStateResponse {
+  string state = 1;
+}
+
+message GetMessageRequest {
+  string message_id = 1;
+}
+
+message GetMessageResponse {
+  MessageDefinition message = 1;
+}
+
+message ListAuditLogRequest {
+  string message_id = 1;
+}
+
+message AuditLogEntry {
+  string from_state = 1;
+  string to_state = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+  // actor is the authenticated principal's subject that requested this transition (CW-0010 Unit 9).
+  string actor = 4;
+}
+
+message ListAuditLogResponse {
+  repeated AuditLogEntry entries = 1;
+}

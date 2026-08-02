@@ -198,15 +198,18 @@ func GetMessage(ctx context.Context, pool *pgxpool.Pool, id string) (model.Messa
 type AuditEntry struct {
 	FromState  model.MessageState
 	ToState    model.MessageState
+	Actor      string
 	OccurredAt time.Time
 }
 
 // UpdateState is CW-0001 Unit 1's kill switch: the one administrative mutation this pass gives a
 // real function to. It moves messageID from its current state to newState only if
 // MessageState.CanTransition allows it (FR-MSG-01: "a transition only moves forward" — rejected
-// rather than silently clamped or ignored), and records the move in message_audit_log in the same
-// transaction, so a state and its audit trail can never disagree about what happened.
-func UpdateState(ctx context.Context, pool *pgxpool.Pool, messageID string, newState model.MessageState, now time.Time) error {
+// rather than silently clamped or ignored), and records the move — along with actor, the
+// authenticated principal's subject that requested it (CW-0010 Unit 9) — in message_audit_log in the
+// same transaction, so a state and its audit trail can never disagree about what happened or who did
+// it.
+func UpdateState(ctx context.Context, pool *pgxpool.Pool, messageID string, newState model.MessageState, actor string, now time.Time) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("store: update state: begin: %w", err)
@@ -234,8 +237,8 @@ func UpdateState(ctx context.Context, pool *pgxpool.Pool, messageID string, newS
 		return fmt.Errorf("store: update state: update message %s: %w", messageID, err)
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO message_audit_log (message_id, from_state, to_state, occurred_at) VALUES ($1, $2, $3, $4)`,
-		messageID, string(from), string(newState), now,
+		`INSERT INTO message_audit_log (message_id, from_state, to_state, actor, occurred_at) VALUES ($1, $2, $3, $4, $5)`,
+		messageID, string(from), string(newState), actor, now,
 	); err != nil {
 		return fmt.Errorf("store: update state: record audit log for %s: %w", messageID, err)
 	}
@@ -250,7 +253,7 @@ func UpdateState(ctx context.Context, pool *pgxpool.Pool, messageID string, newS
 // CW-0001 Unit 1's audit log, what an administrator reviewing a campaign's history sees.
 func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, messageID string) ([]AuditEntry, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT from_state, to_state, occurred_at FROM message_audit_log
+		SELECT from_state, to_state, actor, occurred_at FROM message_audit_log
 		WHERE message_id = $1 ORDER BY occurred_at DESC
 	`, messageID)
 	if err != nil {
@@ -262,7 +265,7 @@ func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, messageID string) ([]
 	for rows.Next() {
 		var e AuditEntry
 		var from, to string
-		if err := rows.Scan(&from, &to, &e.OccurredAt); err != nil {
+		if err := rows.Scan(&from, &to, &e.Actor, &e.OccurredAt); err != nil {
 			return nil, fmt.Errorf("store: scan audit entry for %s: %w", messageID, err)
 		}
 		e.FromState = model.MessageState(from)

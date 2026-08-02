@@ -183,6 +183,53 @@ func TestAcceptDedupsAndAggregates(t *testing.T) {
 	}
 }
 
+// TestRunOnceClampsFutureDeviceTimeToServerTime is CW-0009 Unit 1's clamp rule end to end: a device
+// whose clock reads three days into the future must not be able to inflate a rollup bucket for a day
+// the server has not reached yet — the targeting rollup row lands on the day Accept actually received
+// the event (server_time, via now), not the day the device claims.
+func TestRunOnceClampsFutureDeviceTimeToServerTime(t *testing.T) {
+	pool, redisClient := testDeps(t)
+	ctx := context.Background()
+	channelID := insertChannel(t, ctx, pool)
+	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	futureDeviceTime := now.Add(72 * time.Hour)
+
+	batch := []model.Event{
+		{
+			ID: "01912d2c-0000-7000-8000-000000000040", ChannelID: channelID,
+			Kind: model.KindCustom, Name: "screen_view", DeviceTime: futureDeviceTime,
+		},
+	}
+
+	result, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now)
+	if err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if result.Accepted != 1 {
+		t.Fatalf("Accept() = %+v, want 1 accepted", result)
+	}
+
+	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	var day time.Time
+	var count int64
+	if err := pool.QueryRow(ctx,
+		`SELECT day, count FROM targeting_rollup WHERE channel_id = $1 AND event_name = 'screen_view'`, channelID,
+	).Scan(&day, &count); err != nil {
+		t.Fatalf("query targeting_rollup: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("targeting_rollup screen_view count = %d, want 1", count)
+	}
+	wantDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	if !day.Equal(wantDay) {
+		t.Errorf("targeting_rollup day = %v, want %v (now's day, clamped from the device's claimed future day %v)", day, wantDay, futureDeviceTime)
+	}
+}
+
 // TestAcceptRejectsInvalidEventsButKeepsValidOnes confirms Unit 2's per-event rejection: one bad
 // event in a batch does not sink the rest.
 func TestAcceptRejectsInvalidEventsButKeepsValidOnes(t *testing.T) {

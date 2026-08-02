@@ -43,6 +43,7 @@ type storedEvent struct {
 	Kind              model.Kind
 	Name              string
 	DeviceTime        time.Time
+	ServerTime        time.Time
 	MessageID         string
 	VariantID         string
 	SuppressionReason string
@@ -53,6 +54,29 @@ func (e storedEvent) eventName() string {
 		return e.Name
 	}
 	return string(e.Kind)
+}
+
+// bucketTime is the day/hour a rollup counts e toward: e's device time, unless the server received
+// it before that device time arrived, in which case e.effectiveTime clamps it to server_time. See
+// effectiveTime's doc comment for what this does and does not correct for.
+func (e storedEvent) bucketTime() time.Time {
+	return effectiveTime(e.DeviceTime, e.ServerTime)
+}
+
+// effectiveTime implements the clamp half of CW-0009 Unit 1's correction rule — "reports on device
+// time corrected by the measured clock offset and clamped to the receipt time" — by returning
+// deviceTime unless it is after serverTime, in which case it returns serverTime instead. A device
+// whose clock reads into the future (by accident or by tampering) can therefore never inflate a
+// rollup bucket for a day the server has not itself reached yet.
+//
+// This is only the clamp. The other half of that same sentence — estimating a device's typical small
+// clock offset and correcting for it, rather than just capping outright-future timestamps — is not
+// implemented here; it is out of scope for this change and remains open against Unit 1.
+func effectiveTime(deviceTime, serverTime time.Time) time.Time {
+	if deviceTime.After(serverTime) {
+		return serverTime
+	}
+	return deviceTime
 }
 
 // RunOnce advances consumerName past every event currently in events_log, up to batchLimit rows,
@@ -157,7 +181,7 @@ func currentOffset(ctx context.Context, tx pgx.Tx, consumerName string) (int64, 
 
 func fetchSince(ctx context.Context, tx pgx.Tx, lastSeq int64, batchLimit int) ([]storedEvent, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT seq, channel_id, kind, name, device_time,
+		`SELECT seq, channel_id, kind, name, device_time, server_time,
                 COALESCE(message_id::text, ''), COALESCE(variant_id::text, ''), COALESCE(suppression_reason, '')
          FROM events_log WHERE seq > $1 ORDER BY seq LIMIT $2`,
 		lastSeq, batchLimit,
@@ -171,7 +195,7 @@ func fetchSince(ctx context.Context, tx pgx.Tx, lastSeq int64, batchLimit int) (
 	for rows.Next() {
 		var e storedEvent
 		if err := rows.Scan(
-			&e.Seq, &e.ChannelID, &e.Kind, &e.Name, &e.DeviceTime, &e.MessageID, &e.VariantID, &e.SuppressionReason,
+			&e.Seq, &e.ChannelID, &e.Kind, &e.Name, &e.DeviceTime, &e.ServerTime, &e.MessageID, &e.VariantID, &e.SuppressionReason,
 		); err != nil {
 			return nil, fmt.Errorf("consumer: scan event: %w", err)
 		}
@@ -188,7 +212,7 @@ func applyTargetingRollup(ctx context.Context, tx pgx.Tx, e storedEvent) error {
 		`INSERT INTO targeting_rollup (channel_id, event_name, day, count)
          VALUES ($1, $2, date_trunc('day', $3::timestamptz), 1)
          ON CONFLICT (channel_id, event_name, day) DO UPDATE SET count = targeting_rollup.count + 1`,
-		e.ChannelID, e.eventName(), e.DeviceTime,
+		e.ChannelID, e.eventName(), e.bucketTime(),
 	)
 	if err != nil {
 		return fmt.Errorf("consumer: apply targeting rollup for event seq %d: %w", e.Seq, err)
@@ -201,7 +225,7 @@ func applyCampaignRollup(ctx context.Context, tx pgx.Tx, e storedEvent) error {
 		`INSERT INTO campaign_rollup (message_id, variant_id, hour, kind, count)
          VALUES ($1, $2, date_trunc('hour', $3::timestamptz), $4, 1)
          ON CONFLICT (message_id, variant_id, hour, kind) DO UPDATE SET count = campaign_rollup.count + 1`,
-		e.MessageID, e.VariantID, e.DeviceTime, string(e.Kind),
+		e.MessageID, e.VariantID, e.bucketTime(), string(e.Kind),
 	)
 	if err != nil {
 		return fmt.Errorf("consumer: apply campaign rollup for event seq %d: %w", e.Seq, err)
@@ -226,10 +250,12 @@ func applySuppressionRollup(ctx context.Context, tx pgx.Tx, e storedEvent) error
 // (Unit 5's unique-reach estimate), reading the existing sketch (if any), merging in the one new
 // identity, and writing the result back.
 func applyReachSketch(ctx context.Context, tx pgx.Tx, e storedEvent) error {
+	bucket := e.bucketTime()
+
 	var existing []byte
 	err := tx.QueryRow(ctx,
 		`SELECT sketch FROM reach_sketch WHERE message_id = $1 AND variant_id = $2 AND day = date_trunc('day', $3::timestamptz)`,
-		e.MessageID, e.VariantID, e.DeviceTime,
+		e.MessageID, e.VariantID, bucket,
 	).Scan(&existing)
 
 	var sketch *hll.Sketch
@@ -251,7 +277,7 @@ func applyReachSketch(ctx context.Context, tx pgx.Tx, e storedEvent) error {
 		`INSERT INTO reach_sketch (message_id, variant_id, day, sketch)
          VALUES ($1, $2, date_trunc('day', $3::timestamptz), $4)
          ON CONFLICT (message_id, variant_id, day) DO UPDATE SET sketch = EXCLUDED.sketch`,
-		e.MessageID, e.VariantID, e.DeviceTime, sketch.Marshal(),
+		e.MessageID, e.VariantID, bucket, sketch.Marshal(),
 	)
 	if err != nil {
 		return fmt.Errorf("consumer: write reach sketch for event seq %d: %w", e.Seq, err)

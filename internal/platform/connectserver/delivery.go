@@ -49,7 +49,11 @@ func (s DeliveryServer) Sync(
 	if s.Redis == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("sync requires redis, which this process was started without"))
 	}
-	result, err := deliver.Sync(ctx, s.Pool, s.Redis, req.Msg.GetChannelId(), req.Msg.GetLanguage(), req.Msg.GetEtag(), time.Now(), defaultSyncConfig)
+	channelID, err := requireChannelID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := deliver.Sync(ctx, s.Pool, s.Redis, channelID, req.Msg.GetLanguage(), req.Msg.GetEtag(), time.Now(), defaultSyncConfig)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -139,13 +143,29 @@ func (s DeliveryServer) Confirm(
 	// per-dependency degradation rather than failing every Confirm call for want of a dependency
 	// Confirm's original eligibility check doesn't need.
 	if approved && s.Redis != nil {
-		approved, err = s.checkProjectBudget(ctx, messageID, req.Msg.GetChannelId(), now)
+		channelID, err := requireChannelID(ctx)
+		if err != nil {
+			return nil, err
+		}
+		approved, err = s.checkProjectBudget(ctx, messageID, channelID, now)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 	}
 
 	return connect.NewResponse(&deliveryv1.ConfirmResponse{Approved: approved}), nil
+}
+
+// requireChannelID reads the channel identifier deviceAuthInterceptor verified and attached to ctx.
+// Its absence here would mean this handler is reachable without going through that interceptor — a
+// wiring bug in NewMux, not a caller error — so it fails as CodeInternal rather than
+// CodeUnauthenticated, which is reserved for an actual missing or invalid token.
+func requireChannelID(ctx context.Context) (string, error) {
+	channelID, ok := channelIDFromContext(ctx)
+	if !ok || channelID == "" {
+		return "", connect.NewError(connect.CodeInternal, errors.New("no authenticated channel id in context — deviceAuthInterceptor is not wired in front of this handler"))
+	}
+	return channelID, nil
 }
 
 // checkProjectBudget is CW-0007 Unit 6's atomic half: exempt campaigns bypass the budget entirely

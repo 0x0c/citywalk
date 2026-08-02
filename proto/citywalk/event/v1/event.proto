@@ -21,6 +21,9 @@ service EventService {
 // hands back, so a native message adds a codec round trip for no gain.
 message Event {
   string id = 1;
+  // channel_id is accepted for the wire shape but never trusted: EventServer.Submit overwrites it
+  // with CW-0010 Unit 9's authenticated channel identity before this event ever reaches
+  // ingest.Accept, the same as SubmitRequest.channel_id below.
   string channel_id = 2;
   // kind is one of model.Kind's closed set (e.g. "impression", "custom").
   string kind = 3;
@@ -37,9 +40,9 @@ message Event {
 }
 
 message SubmitRequest {
-  // channel_id is declared for the wire shape; see DeliveryService's ConfirmRequest for why no
-  // handler should trust it over token-derived identity once CW-0010 Unit 9 exists. Every event in
-  // events must carry this same channel_id.
+  // channel_id is accepted for the wire shape but never trusted: CW-0010 Unit 9's device auth
+  // interceptor binds the caller's channel identity to its verified bearer token, and the handler
+  // acts on that identity regardless of what channel_id names here.
   string channel_id = 1;
   repeated Event events = 2;
 }
