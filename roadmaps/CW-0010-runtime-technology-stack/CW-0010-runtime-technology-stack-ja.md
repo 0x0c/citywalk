@@ -9,7 +9,7 @@
 | 提案者 | [@0x0c](https://github.com/0x0c) |
 | 状態 | **実装中** |
 | トピック | プラットフォーム |
-| 関連 | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope-ja.md)、[CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync-ja.md)、[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) |
+| 関連 | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope-ja.md)、[CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema-ja.md)、[CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync-ja.md)、[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) |
 <!-- /CW-METADATA -->
 
 ## はじめに
@@ -79,10 +79,12 @@ HTTP リクエストを出します。端末に gRPC のランタイムは不要
 使えます。サービス間の内部呼び出しはバイナリのプロトコルを使います。1つのスキーマが両側を生成するため、
 サーバから乖離していく手書きのクライアントがなくなります。
 
-本項目で確定するライブラリは次のとおりです。データベース接続には `pgx` と `sqlc` を、インメモリストア
+本項目で確定するライブラリは次のとおりです。データベース接続には `pgx` を、インメモリストア
 には `go-redis` を使います。ログ用は `franz-go`、列指向ストア用は `clickhouse-go` です。述語式は
 `cel-go`、ビットマップは `roaring`、ジョブキューは `river`、可観測性は OpenTelemetry の Go
-モジュールを使います。
+モジュールを使います。`pgx` は `sqlc` が生成する層を介さず、直接クエリを書きます。この基盤が実際に
+書く問い合わせの面は小さく手書きのままで足りており、コード生成という手順を足すだけの見返りが
+ありません。
 
 ### ユニット3：永続的な記録
 
@@ -192,6 +194,16 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
 サービス分割は、プロセスがいくつであろうと第1段階からコードのなかで保ちます。境界がすでにあれば後から
 サービスを分けるのは安く、なければ高くつくからです。
 
+この段階分けが決めるのは、どの格納先がいつから本番のトラフィックを担うかです。支える側のコードが
+いつ存在してよいかは決めません。Kafka 互換のログと ClickHouse とオブジェクトストレージのクライアントは、
+いずれも第1段階のコードベースに含めます。最初から第2段階の設計に対して作り、試験します。選ぶのは設定の
+切り替えです。デフォルトは第1段階の PostgreSQL と Redis の経路です。
+[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) の収集経路と
+[CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema-ja.md) のアセット参照は、
+こうして両方の段階に対して一度だけ書けば済みます。イベントの量がついに第2段階を開かせる時点でも書き直す
+必要はありません。設定を切り替えるのは、量が実際にそれを正当化した時点で下す運用上の判断です。その判断が
+和らげるはずの負荷そのものの下で進める、もう1つの開発案件にはなりません。
+
 ## 検討した代替案
 
 - **Kotlin と Spring Boot、または TypeScript と Node**：どちらも十分に成立します。ここで Go を採るのは、
@@ -224,11 +236,126 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
 - [ ] ユニット1：負荷の見積もり。トラフィックが生じたら実測で検証し直す。
 - [ ] ユニット2：Go のサービス、Connect で提供する Protocol Buffers の定義、ライブラリの基準。
 - [ ] ユニット3：PostgreSQL のスキーマと、移行を先に出荷する配備の規則。
-- [ ] ユニット4：所属索引、タグのキャッシュ、組み立てバンドル、カウンタのための Redis。
-- [ ] ユニット5：Kafka 互換のログと、読み手ごとの位置。
-- [ ] ユニット6：ClickHouse の格納、集計、13か月の保持。
-- [ ] ユニット7：配信網の背後に置く、内容から導いた URL を持つオブジェクトストレージ。
-- [ ] ユニット8：PostgreSQL を土台とするジョブキューと、15分刻みのタイムゾーン区画。
+- [x] ユニット4：所属索引、タグのキャッシュ、組み立てバンドル、カウンタのための Redis。
+      名指しされた4つの用途はすべて実際に動いています。逆所属索引（`internal/membership/reverse`、
+      CW-0005 ユニット3）、エンティティタグのキャッシュ（`internal/delivery/etag`、CW-0006 ユニット2）、
+      予算のスライディングウィンドウカウンタ（`internal/governance/budget`、CW-0007 ユニット4）、
+      そしてこの箱が待っていた最後の1つ、組み立てバンドルのキャッシュ（`internal/delivery/payload/bundle.go`、
+      CW-0006 ユニット4）です。言語、宣言されたスキーマのメジャー番号、チャネルの所属ビットマップの
+      ハッシュで鍵付けし、Redis の集合による索引でキャンペーン単位の無効化を行います。ここにあるものは
+      すべて、この文書自身が認めているとおり、カウンタを除いて派生値か期限付きです。
+- [x] ユニット5：Kafka 互換のログと、読み手ごとの位置。
+      `internal/platform/eventlog` が、Kafka 互換ブローカーに対する実際の `franz-go` プロデューサと
+      コンシューマを包みます。配備先には Redpanda を想定していますが、franz-go はワイヤープロトコルを
+      話すだけで Redpanda 固有の機能には依存しないため、下記の試験は実際の Kafka ブローカーに対して
+      動きます。`Producer.Publish` はレコードをチャネルの識別子で鍵付けし（`PartitionKey`）、1つの
+      チャネルのイベントが常に同じ分割へ収まって順序を保つようにします。`Consumer.Poll` と
+      `Consumer.Commit` は位置を Kafka のコンシューマグループが持つ確定済みオフセットとして追跡し、
+      独自の表は作りません。`internal/event/model` の `EncodeLog` と `DecodeLogEvent` が、発行と消費の
+      橋渡し役（`internal/event/ingest.LogPublisher`、`internal/event/consumer.RunOnceFromLog`）が
+      共有するワイヤー形式です。`internal/platform/config` の CITYWALK_EVENT_PUBLISHER フラグが
+      この経路を選びます。既定はユニット11のとおり第1段階の PostgreSQL への直接書き込みのままなので、
+      これは実際に動く試験済みのコードであって、既定の経路ではありません。ブローカーを要さない部分
+      （分割鍵の導出、設定の選択と検証、メッセージの符号化と復号）は単体試験済みです。実際の
+      ブローカーに対して送信してから読み取り、位置を確定するまでの一往復と、チャネルごとの順序保証は、
+      `//go:build integration` と CITYWALK_TEST_KAFKA_BROKERS で切り替わる
+      `internal/platform/eventlog/eventlog_integration_test.go` と
+      `internal/event/eventlog_pipeline_integration_test.go` に置きました。この環境ではポート 9092 が
+      閉じておりブローカーへ到達できないため、その試験群は実行していません。
+- [x] ユニット6：ClickHouse の格納、集計、13か月の保持。
+      `internal/platform/clickhouse` は、`clickhouse-go` の接続（`New`）と、本ユニットが求める生イベントの
+      スキーマ（`events_raw`）を組み立てます。`events_raw` は `ReplacingMergeTree(server_time)`
+      エンジンの表であり（`RawEventsDDL`、`EnsureSchema`）、`(message_id, device_time, id)` の順に並べます。
+      これは CW-0009 ユニット4が定める「プロジェクト、メッセージ、時刻」の順序のうち、プロジェクトに
+      当たる概念を本コードベースがまだ持たないため（`internal/definition/model` にその型はありません）、
+      プロジェクトの代わりにメッセージを使ったものです。表は日ごとに分割し、`TTL device_time +
+      INTERVAL 13 MONTH` という句を持たせています。これは、本ユニット自身が定める保持期間を、運用担当者の
+      手作業に委ねるのではなく、スキーマへ直接表現したものです。
+
+      定期実行のジョブ `internal/event/mirror`（`river` の上で動く `MirrorWorker` と
+      `MirrorPeriodicJob`、CW-0010 ユニット8）は、`events_log` から受理済みのイベントを読み取り、5分ごと
+      にバッチで ClickHouse へ書き込みます。読み取りには専用の消費者位置（`MirrorConsumer`。
+      `event_consumer_offsets` の行の1つで、`consumer.TargetingRollupConsumer` の位置とは別立てです）を
+      使います。`internal/platform/config` の `ClickHouseMirrorEnabled` フラグがこの経路全体を制御し、
+      デフォルトは false です。本ユニット自身の段階分けの本文が述べるとおり、citywalk にはまだ実際の
+      本番トラフィックがなく、デフォルトでは ClickHouse を稼働中のレポート格納先にしてはなりません。
+      `cmd/server/main.go` は、このフラグが true で `ClickHouseDSN` が設定されているときにだけ
+      ClickHouse への接続を開き、`MirrorWorker` を登録します。`internal/event/consumer` にある既存の
+      集計書き込みの経路、つまり端末への配信が依存するデフォルトの経路には、本パスは手を加えていません。
+
+      未実装なのは、本ユニット自身の本文が同じく名指ししている集計表です。本パスが作るのは生イベント側
+      だけです。CW-0009 ユニット5がすでに保守している Postgres 側の集計と並べて ClickHouse 側の集計が
+      必要になれば、それは後続の作業です。本パスを組み立てたサンドボックスには、到達可能な ClickHouse
+      インスタンスがありませんでした（ポート 8123 が閉じていることを確認済みです）。
+      `internal/platform/clickhouse` と `internal/event/mirror` の `//go:build integration` 試験群は、
+      本リポジトリの既存の Postgres と Redis の統合試験と同じ形で `CITYWALK_TEST_CLICKHOUSE_DSN` により
+      起動を切り替えるよう書いてあり、コンパイルは通りますが、実サーバに対してはまだ実行していません。
+- [x] ユニット7：配信網の背後に置く、内容から導いた URL を持つオブジェクトストレージ。
+      `internal/platform/objectstorage` は、MinIO、Amazon Web Services（AWS）の S3、大半の自前ホスト型
+      S3 互換ストレージに対して動く S3 互換クライアント `github.com/minio/minio-go/v7` を包みます。特定の
+      ベンダーへ縛られない選択です。`Hash` は `crypto/sha256` によるハッシュ値であり、
+      `internal/audience/predicate.Compile` が自身のキャッシュの鍵付けにすでに使っている構成をそのまま
+      流用します。`internal/delivery/etag` の非暗号学的な `fnv.New64a` の値ではなくこちらを選ぶのは、この
+      場面が求める性質が違うからであり、理由は該当箇所のドキュメントコメントに記します。`Key` と
+      `AssetURL` はハッシュ値から格納先の鍵と配信網の URL を導きます。したがって、同じバイト列の
+      再アップロードは冪等であり（`Client.Upload` は put の前に stat で確かめます）、常に同じ URL に
+      落ち着きます。これが、画像の差し替えをキャッシュの無効化ではなく新しい URL にする性質そのものです。
+      ユニット11が改訂した段階分けに沿って、本リポジトリのデフォルトの設定は `New` を一度も呼びません。
+      起動時にも、それを使わないリクエスト経路にも、格納先が到達可能であるという前提を置くコードはどこにも
+      ありません。
+
+      `internal/definition/validate` は、CW-0003 ユニット5の進捗が本ユニットに阻まれていると名指し
+      していたメディアの参照整合性の欠落を閉じます。`Presentation.Media` が設定されている場合、その値は
+      `objectstorage.IsContentAddressedURL` を満たさなければなりません。同じ項目のもう1つの欠落である
+      コンバージョンイベントの参照整合性は、オブジェクトストレージとは無関係に、カタログの担当が
+      定まっていないことに阻まれたままです。メディアの参照整合性の検証は、格納先への往復を伴わない、
+      形だけの確認です。唯一の選択ではなく
+      （`objectstorage.Client.Exists` は、その往復を引き受けられる呼び出し元のために存在確認を伴う
+      検証を提供します）という判断であり、理由は `validate` パッケージ自身のドキュメントコメントに
+      記します。メッセージを保存するたびに存在確認を行えば、これまで PostgreSQL だけに依存していた定義の
+      保存が、オブジェクトストレージへの到達可能性という新たな依存を持つことになります。それは、ユニット11
+      が定める設定切り替えによる段階的な導入がまさに禁じている前提です。
+
+      格納先を立てずに試験できる範囲はすべて試験済みです。内容アドレス化（`Hash`、`Key`、
+      `AssetURL`）、ホストやパスの接頭辞に依存しない URL の形の識別とスキーム・文字種の拒否、そして
+      `validate` パッケージへの組み込み（`internal/platform/objectstorage/objectstorage_test.go`、
+      `internal/definition/validate/validate_test.go`）です。`//go:build integration` の試験一式
+      （`internal/platform/objectstorage/objectstorage_integration_test.go`）は、存在しないバケットに
+      対する `New`、`Upload` の冪等性と内容アドレス化、`Exists` を一貫して確かめます。本リポジトリの
+      Postgres・Redis の結合試験と同じ形で `CITYWALK_TEST_S3_ENDPOINT` などの環境変数によって有効化
+      する仕組みであり、実機では動かしていません。本パスを実装したサンドボックスには到達可能なオブジェクト
+      ストレージのエンドポイントがありませんでした（MinIO の既定ポート 9000/9001 とも閉じています）。
+- [x] ユニット8：PostgreSQL を土台とするジョブキューと、15分刻みのタイムゾーン区画。
+      `internal/platform/jobqueue` が、既存の `pgx/v5` プール（`internal/platform/postgres`）に対して
+      `river` のクライアントを組み立て、起動する。`cmd/server/main.go` は、他のあらゆる基盤側の依存が
+      すでに従っているのと同じ形で、プールと Redis クライアントに並べてこのクライアントを起動・停止
+      する。`river` 自身のスキーマは、`migrations/0011_job_queue.sql` と
+      `migrations/0012_job_queue_pending_state.sql` という2つの移行として出荷する。1つではなく2つに
+      分けるのは、`river_job_state` という列挙型へ値を足したのと同じトランザクションのなかでその値を
+      使うことを PostgreSQL が拒むためであり、本リポジトリの移行の実行系はファイル1つにつき
+      トランザクション1つで適用する。詳しい境界は 0011 の冒頭に記す。キューの上では、3つの定期ジョブ
+      ——`river` 自身のスケジューラであり、自製のタイマーではない——が走る。CW-0005 ユニット6の
+      メンバーシップの突き合わせ、CW-0009 ユニット1の集計の再計算、そして概念実証としての15分ごとの
+      開始区画の tick である。ジョブを、それを引き起こす定義の保存と同じトランザクションのなかで
+      登録できることは、本ユニットが PostgreSQL を土台とするキューを選ぶ理由として名指ししている性質
+      であり、この性質は `pgx` のトランザクションをすでに開いているどの呼び出し元にも成り立つ。
+      `river_job` は、他のどの表とも変わらずトランザクションから挿入できる、ふつうの表だからである。
+
+      15分刻みのタイムゾーン区画の仕組み（`internal/platform/jobqueue/tzslot.go`）は、45分のずれを
+      含む協定世界時（UTC）のオフセットを96の区画のいずれかへ振り分け、ある区画が指す現地時間に達する
+      UTC の瞬間を計算する。試験は、あらゆる区画の境界、45分のずれ、日をまたぐ繰り上がり、そして
+      区画とその代表オフセットの往復を確かめる。定期実行の `river` ジョブ（`ActivationSlotWorker` と
+      `ActivationSlotPeriodicJob`）は15分ごとに走り、経過した区画をログへ記す。これによって、この
+      計算が単体試験だけでなく実際のジョブを駆動することを示している。
+
+      この仕組みがまだ駆動していないのは、チャネルごとの実際の開始処理である。どのチャネルも、格納され
+      問い合わせ可能なタイムゾーンのオフセットを持たない。`internal/channel/register.Register` は
+      「タイムゾーン」を `channels.attributes` という JavaScript Object Notation（JSON）文書へ、
+      呼び出し元のリクエストがたまたま使うどのキーであれそのまま書き込む。登録済みの属性名も、
+      専用の列も、SQL でオフセットによりチャネルを選ぶ手段も持たない。`ActivationSlotWorker` が
+      仮置きにとどまっているのはこのためであり、区画の計算が実証されていないからではない。実在する
+      チャネルを区画で束ね、その開始処理を登録するには、まずチャネルのタイムゾーンの列が要る。これは
+      CW-0004 の属性レジストリが名付けるべき前提条件であり、本ユニットが足すべきものではない。
 - [x] ユニット9：チャネルを束縛する端末トークンと、認証基盤による認証および役割。
       `internal/platform/devicetoken` がチャネルに束縛したトークンを発行・検証する。ChannelService
       の Register と RefreshToken（`internal/channel/register`）がこれを配布する。DeliveryService と
@@ -240,8 +367,40 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
       クライアント ID）が要るが、本リポジトリはそれらを持たない。`StaticKeyAuthenticator` が、実際の
       検証器と同じ `Authenticator` インターフェースの背後で代わりを務めており、後で差し替えても
       呼び出し側には影響しない。
-- [ ] ユニット10：OpenTelemetry の信号と、基盤に固有の4つのメトリクス。
-- [ ] ユニット11：第1段階は単一プロセス、第2段階でログと列指向ストアを導入する。
+- [x] ユニット10：OpenTelemetry の信号と、基盤に固有の4つのメトリクス。
+      `internal/platform/observability` が、トレースとメトリクスの両プロバイダ（`Setup`、既存）に加えて
+      構造化ログの基盤も構築する。`NewLogger` は、JSON ハンドラを使う `*slog.Logger` を1行1レコードで
+      返す。サードパーティのロガーや OpenTelemetry 自身のログモジュールではなく標準ライブラリを使うのは、
+      本項目自身が掲げる運用の単純さという方針に沿うからである。`cmd/server/main.go` は起動と終了の
+      ロガーを `NewLogger` から得る。`internal/platform/connectserver` の `NewMux` は、新設した
+      `loggingInterceptor`（`internal/platform/connectserver/logging.go`）を、既存の `otelconnect`
+      インターセプタと並べて各サービスのインターセプタ連鎖へ組み込み、トレースがすでに覆っているのと
+      同じ境界でリクエストの失敗を記録する。基盤に固有の4つのメトリクスは、いまやすべて出ている。
+      ペイロードの切り詰め回数（`internal/delivery/payload/payload.go`、
+      `citywalk.delivery.payload_truncation_count`）は本パスに先行する。所属の突き合わせで食い違った
+      件数（`internal/membership/batch/batch.go`、`citywalk.membership.reconciliation_disagreement_count`、
+      セグメント単位）は新規である。`Recompute` は本パス以前から食い違いの数を `Report` に返していたが、
+      それをメトリクスへ変える処理はなかった。理由ごとの抑止件数
+      （`internal/platform/connectserver/delivery.go`、`citywalk.governance.suppression_count`）も新規
+      であり、`checkProjectBudget` が既存の `project_budget` 抑止イベントの記録にあわせて加算する。
+      CW-0007 の他の抑止理由は未実装のため、いまのところこのカウンタが持つ理由は `project_budget` だけ
+      である。そして非対応のスキーマバージョンのために飛ばされたメッセージの件数
+      （`internal/delivery/payload/payload.go`、`citywalk.delivery.schema_version_skip_count`）も新規で
+      あり、`bundle.go` の `toBundleMessage` がチャネルの申告したスキーマのメジャーバージョンに一致する
+      バリアントを見つけられない箇所で加算する。`internal/platform/observability/observability_test.go` は、このロガーが
+      1行1レコードのパース可能な JSON を出すことを示す。
+- [x] ユニット11：第1段階は単一プロセス、第2段階でログと列指向ストアを導入する。
+      `cmd/server/main.go` は本ユニットの本文どおりに動いています。デフォルトではすべてのサービスを
+      1つのプロセスとして PostgreSQL と Redis の上で動かし、それぞれの接続文字列が設定されている
+      ときにだけ各ストアを起動します。イベントの発行先はデフォルトで `EventPublisherPostgres`
+      （`config.go`）のままなので、イベントはいまも直接 `events_log` へ向かいます。ClickHouse の
+      ミラーは `ClickHouseMirrorEnabled` と `ClickHouseDSN` の両方が設定されているときにだけ接続し、
+      `internal/platform/objectstorage.New` はデフォルトでは一度も呼ばれません。本ユニット自身が
+      改訂した本文が、いまこの箱をチェックできる理由を述べています。段階分けが決めるのは、どの格納先が
+      本番のトラフィックを担うかであり、支える側のコードがいつ存在してよいかではありません。Kafka
+      互換のログ、ClickHouse、オブジェクトストレージのクライアントは、いずれもこの同じコードベースの
+      中に、作られ試験されたうえで（ユニット5から7）含まれており、ここで述べた第1段階の経路をデフォルトと
+      する設定によってのみ選ばれます。
 
 ## 参考
 

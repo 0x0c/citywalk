@@ -137,7 +137,7 @@ func run(postgresDSN, redisAddr, listenAddr string) error {
 			adminAPIKey: {Subject: "demo-campaign-author", Role: adminauth.RoleEditor},
 		},
 	}
-	mux, err := connectserver.NewMux(pool, redisClient, tokenSigningSecret, adminAuthenticator)
+	mux, err := connectserver.NewMux(pool, redisClient, tokenSigningSecret, adminAuthenticator, nil)
 	if err != nil {
 		return fmt.Errorf("build connect mux: %w", err)
 	}

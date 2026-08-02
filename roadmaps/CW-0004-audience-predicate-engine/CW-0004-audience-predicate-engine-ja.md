@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [CW-0004](CW-0004-audience-predicate-engine-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **実装中** |
+| 状態 | **実装済み** |
 | トピック | ターゲティング |
 | 関連 | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model-ja.md)、[CW-0005](../CW-0005-segment-membership-index/CW-0005-segment-membership-index-ja.md) |
 <!-- /CW-METADATA -->
@@ -147,17 +147,22 @@ SQL へ変換できない構文は、保存時にその構文を名指しして�
 - [x] ユニット2：直列化した構文木としての述語式の保存と、表示用ソースの保持。
 - [x] ユニット3：木のハッシュをキーとするコンパイルキャッシュを備えた行単位の評価。
 - [x] ユニット4：構文木から SQL への変換と、2つの実行系の適合性テストスイート。
-- [ ] ユニット5：イベントのロールアップと、日単位バケットに対する期間付き条件。
+- [x] ユニット5：イベントのロールアップと、日単位バケットに対する期間付き条件。
       ロールアップの収集(CW-0009 の `targeting_rollup`。CW-0009 が存在するようになったいま)と、
       期間付き合計の評価はどちらも実装・試験済みで、実際の Postgres に対して両方のバックエンドで
       動きます。`sqlcompile` はイベント集計属性を `targeting_rollup` への相関サブクエリへ
       コンパイルし(`internal/audience/sqlcompile`)、`reach` は同じ合計値を行単位の評価器の属性
       マップへ取り込みます(`internal/audience/reach`)。実際に送信されたイベントから CW-0009 の
       集計読み手を経て `batch_only` セグメントの所属に至るまで、一連の流れとして確認済みです。
-      未実装なのは、ロールアップが持たない精度を求める条件を型検査で拒否する規則です。
-      `AggregateGranularity` は今のところ `"day"` しかなく、定義の期間は常に日の整数個であるため、
-      述語の言語がそれより細かい精度をそもそも求められません。この拒否が実際に意味を持つのは、
-      述語が誤って求めうるより細かい粒度がもう1つ存在するようになってからです。
+      型検査の規則も実装しました。`predicate.validateAggregateGranularity`
+      (`internal/audience/predicate/predicate.go`)が条件の構文木を辿り、参照するイベント集計属性
+      ごとに `registry.GranularityCarries`(`internal/audience/registry/registry.go`)を呼び、属性の
+      登録された粒度が、期間が常に求める日単位の精度(`AggregateWindowDays` は常に日の整数個です)に
+      対して粗すぎる場合に条件を拒否します。`AggregateGranularity` は本番ではいまも `"day"` しか
+      名乗らないため、この規則は実在する `Definition` に対しては発火しません。`registry_test.go` と
+      `predicate_test.go` は、テスト専用に合成した「hour」「week」という粒度に対してこの比較と拒否の
+      流れを直接検証しており、実際に第二の、より細かいまたは粗い粒度が登録される日には、この規則が
+      すでに機能することを示しています。
 - [x] ユニット6：信頼区間を返す標本による到達人数の推定。
 
 ## 参考

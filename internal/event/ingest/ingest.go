@@ -1,8 +1,14 @@
 // Package ingest implements CW-0009 Unit 2: batch acceptance. Accept validates each event's shape,
-// enforces the per-channel rate limit, appends the surviving events to the log (Unit 3's seam) with
-// merge-time dedup on the event identifier (Unit 4), and returns counts. It performs no aggregation,
-// no lookup against campaign state, and no deduplication beyond the identifier — which is what keeps
+// flags (but does not reject) an event whose device time is implausible against Unit 1's clock-offset
+// tolerance, enforces the per-channel rate limit, appends the surviving events to the log (Unit 3's
+// seam) via a Publisher, and returns counts. It performs no aggregation, no lookup against campaign
+// state, and no deduplication beyond what the chosen Publisher itself does — which is what keeps
 // acceptance latency independent of everything downstream.
+//
+// Publish's destination is CW-0010 Unit 11's staged-adoption seam: PostgresPublisher writes directly
+// to events_log with merge-time dedup on the event identifier (Unit 4) and is the only implementation
+// wired in by default; LogPublisher writes to the Kafka-compatible log (internal/platform/eventlog,
+// CW-0010 Unit 5) instead, selected only by internal/platform/config's explicit configuration.
 package ingest
 
 import (
@@ -26,11 +32,46 @@ type Result struct {
 	Accepted            int
 	RejectedInvalid     int
 	RejectedRateLimited int
+	// ClockSkewFlagged counts events whose device time diverged from this batch's receipt time by
+	// more than model's tolerance (model.ClockSkewImplausible). A flagged event is still accepted —
+	// see the comment where this is set, in Accept — this is a count for observability, not a
+	// rejection reason.
+	ClockSkewFlagged int
+}
+
+// Publisher is where Accept and Record write an already-validated batch — CW-0010 Unit 11's staged
+// adoption point. PostgresPublisher (below) is phase one's direct write to events_log and the only
+// implementation wired in by default; internal/platform/config's event publisher mode selects an
+// alternative, log-backed implementation (LogPublisher, in this package) only when explicitly
+// configured to, since CW-0010 Unit 11 leaves the actual cutover to a later operational decision.
+type Publisher interface {
+	// Publish appends events (already validated and rate-limit-checked by Accept, or a single record
+	// by Record) and reports how many were newly accepted. now is the server receipt time stamped on
+	// every event.
+	Publish(ctx context.Context, events []model.Event, now time.Time) (int, error)
+}
+
+// PostgresPublisher is phase one's publisher: appendToLog's INSERT ... ON CONFLICT DO NOTHING against
+// events_log, unchanged from how this package wrote before Publisher existed to abstract it.
+type PostgresPublisher struct {
+	Pool *pgxpool.Pool
+}
+
+// Publish implements Publisher by appending events to events_log, reporting how many rows were
+// actually new (Unit 4's merge-time dedup collapses the rest).
+func (p PostgresPublisher) Publish(ctx context.Context, events []model.Event, now time.Time) (int, error) {
+	return appendToLog(ctx, p.Pool, events, now)
 }
 
 // rejectedCounter records Unit 2's rejected-volume-by-channel metric: without it, a device stuck in
 // a render loop degrades silently instead of showing up as a spike a project owner can see.
 var rejectedCounter = mustCounter()
+
+// clockSkewCounter records Unit 1's clock-offset sanity check: docs/requirements.md's constraint #2
+// requires that a device whose offset exceeds a threshold be "detected and logged," and this is that
+// detection surfaced as a metric rather than only as Result.ClockSkewFlagged, so it is visible without
+// a caller having to inspect every batch's result.
+var clockSkewCounter = mustClockSkewCounter()
 
 func mustCounter() metric.Int64Counter {
 	c, err := otel.Meter("citywalk/event/ingest").Int64Counter(
@@ -44,10 +85,22 @@ func mustCounter() metric.Int64Counter {
 	return c
 }
 
+func mustClockSkewCounter() metric.Int64Counter {
+	c, err := otel.Meter("citywalk/event/ingest").Int64Counter(
+		"citywalk.event.clock_skew_flagged_count",
+		metric.WithDescription("Count of accepted events whose device time diverged from server receipt time beyond tolerance, by channel"),
+	)
+	if err != nil {
+		// Int64Counter only fails on a malformed instrument name, fixed at compile time.
+		panic(err)
+	}
+	return c
+}
+
 // Accept processes one channel's batch. Every event in batch must share channelID; a mixed batch is
 // a shape error, since the rate limit and the rejection metric below are both scoped per channel.
 func Accept(
-	ctx context.Context, pool *pgxpool.Pool, limiter ratelimit.Limiter,
+	ctx context.Context, publisher Publisher, limiter ratelimit.Limiter,
 	channelID string, batch []model.Event, now time.Time,
 ) (Result, error) {
 	var result Result
@@ -62,6 +115,14 @@ func Accept(
 			result.RejectedInvalid++
 			recordRejection(ctx, channelID, "invalid", 1)
 			continue
+		}
+		// Unit 1's clock-offset sanity bound: an event this far off is still accepted (rejecting it
+		// would need a round trip the device may never make again), but it is flagged rather than
+		// trusted — model.EffectiveTime is what stops it from being trusted verbatim wherever a
+		// rollup buckets by time downstream (Unit 5's consumer).
+		if model.ClockSkewImplausible(e.DeviceTime, now) {
+			result.ClockSkewFlagged++
+			recordClockSkew(ctx, channelID, 1)
 		}
 		valid = append(valid, e)
 	}
@@ -80,7 +141,7 @@ func Accept(
 		return result, nil
 	}
 
-	accepted, err := appendToLog(ctx, pool, valid, now)
+	accepted, err := publisher.Publish(ctx, valid, now)
 	if err != nil {
 		return Result{}, err
 	}
@@ -92,6 +153,12 @@ func recordRejection(ctx context.Context, channelID, reason string, n int) {
 	rejectedCounter.Add(ctx, int64(n), metric.WithAttributes(
 		attribute.String("citywalk.event.channel_id", channelID),
 		attribute.String("citywalk.event.reject_reason", reason),
+	))
+}
+
+func recordClockSkew(ctx context.Context, channelID string, n int) {
+	clockSkewCounter.Add(ctx, int64(n), metric.WithAttributes(
+		attribute.String("citywalk.event.channel_id", channelID),
 	))
 }
 
@@ -143,11 +210,11 @@ func nullIfEmpty(s string) *string {
 // event the server itself emits — for example, CW-0007's governance layer recording a suppression it
 // just decided. e must already be a fully formed, valid event; Record still runs Validate so a
 // programming error here fails loudly rather than writing a malformed row.
-func Record(ctx context.Context, pool *pgxpool.Pool, e model.Event, now time.Time) error {
+func Record(ctx context.Context, publisher Publisher, e model.Event, now time.Time) error {
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("ingest: record: %w", err)
 	}
-	_, err := appendToLog(ctx, pool, []model.Event{e}, now)
+	_, err := publisher.Publish(ctx, []model.Event{e}, now)
 	if err != nil {
 		return fmt.Errorf("ingest: record: %w", err)
 	}

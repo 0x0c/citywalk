@@ -11,6 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	deliveryv1 "github.com/0x0c/citywalk/gen/citywalk/delivery/v1"
@@ -21,6 +24,22 @@ import (
 	eventmodel "github.com/0x0c/citywalk/internal/event/model"
 	"github.com/0x0c/citywalk/internal/governance/budget"
 )
+
+// suppressionCounter records CW-0010 Unit 10's named suppression-count-by-reason metric: a campaign
+// suppressed here and never displayed produces no error anywhere, so this counter is what tells that
+// case apart from a campaign nobody qualified for in the first place.
+var suppressionCounter = mustSuppressionCounter()
+
+func mustSuppressionCounter() metric.Int64Counter {
+	c, err := otel.Meter("citywalk/platform/connectserver").Int64Counter(
+		"citywalk.governance.suppression_count",
+		metric.WithDescription("Count of impressions suppressed by governance, by reason"),
+	)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
 
 // defaultSyncConfig holds the phase-one synchronization parameters: no per-project configuration
 // exists yet (the administrative interface, CW-0001 Unit 1, isn't built), so these are fixed
@@ -40,6 +59,15 @@ var defaultSyncConfig = deliver.Config{
 type DeliveryServer struct {
 	Pool  *pgxpool.Pool
 	Redis *redis.Client
+	// DeltaModeEnabled is CW-0006 Unit 3's per-project switch, threaded through separately from
+	// defaultSyncConfig rather than baked into it, so a caller (or a test) can turn delta mode on
+	// without needing to override every other synchronization parameter too. Zero value (false)
+	// matches defaultSyncConfig's own "off by default" for every construction site that predates
+	// Unit 3.
+	DeltaModeEnabled bool
+	// Publisher is where checkProjectBudget's suppression event lands (CW-0010 Unit 11's staged
+	// adoption). NewMux defaults it to ingest.PostgresPublisher{Pool: Pool} whenever Pool is set.
+	Publisher ingest.Publisher
 }
 
 func (s DeliveryServer) Sync(
@@ -53,7 +81,9 @@ func (s DeliveryServer) Sync(
 	if err != nil {
 		return nil, err
 	}
-	result, err := deliver.Sync(ctx, s.Pool, s.Redis, channelID, req.Msg.GetLanguage(), req.Msg.GetEtag(), time.Now(), defaultSyncConfig)
+	cfg := defaultSyncConfig
+	cfg.DeltaModeEnabled = s.DeltaModeEnabled
+	result, err := deliver.Sync(ctx, s.Pool, s.Redis, s.Publisher, channelID, req.Msg.GetLanguage(), req.Msg.GetEtag(), req.Msg.GetCursor(), time.Now(), cfg)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -62,6 +92,8 @@ func (s DeliveryServer) Sync(
 		Unchanged:  result.Unchanged,
 		Etag:       result.ETag,
 		NextSyncAt: timestamppb.New(result.NextSyncAt),
+		IsDelta:    result.IsDelta,
+		Cursor:     result.Cursor,
 	}
 	if result.Payload != nil {
 		if remaining := result.Payload.ProjectBudgetRemaining; remaining != nil {
@@ -73,6 +105,7 @@ func (s DeliveryServer) Sync(
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 		resp.Entries = entries
+		resp.TombstonedMessageIds = result.Tombstones
 	}
 	return connect.NewResponse(resp), nil
 }
@@ -195,9 +228,12 @@ func (s DeliveryServer) checkProjectBudget(ctx context.Context, messageID, chann
 			MessageID:         messageID,
 			SuppressionReason: eventmodel.ReasonProjectBudget,
 		}
-		if err := ingest.Record(ctx, s.Pool, suppression, now); err != nil {
+		if err := ingest.Record(ctx, s.Publisher, suppression, now); err != nil {
 			return false, fmt.Errorf("checkProjectBudget: record suppression: %w", err)
 		}
+		suppressionCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("citywalk.governance.suppression_reason", string(eventmodel.ReasonProjectBudget)),
+		))
 	}
 	return allowed, nil
 }

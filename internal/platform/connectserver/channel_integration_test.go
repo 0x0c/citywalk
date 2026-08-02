@@ -47,7 +47,7 @@ func TestRegisterRPCIssuesACredentialAndAccessToken(t *testing.T) {
 	pool := channelTestPool(t)
 	ctx := context.Background()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestRefreshTokenRPCExchangesACredentialForAFreshAccessToken(t *testing.T) {
 	pool := channelTestPool(t)
 	ctx := context.Background()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRefreshTokenRPCRejectsAWrongCredential(t *testing.T) {
 	pool := channelTestPool(t)
 	ctx := context.Background()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestRefreshTokenRPCRejectsAnUnknownChannel(t *testing.T) {
 	pool := channelTestPool(t)
 	ctx := context.Background()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}

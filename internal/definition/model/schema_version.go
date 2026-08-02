@@ -16,9 +16,30 @@ type SchemaVersion struct {
 	Minor int `json:"minor"`
 }
 
-// CurrentMajor is the only Major version the server emits and accepts today. A second Major arrives
-// as parallel emission (CW-0003 Unit 4), not as a change to this constant.
+// CurrentMajor is the baseline Major version the server has always served. A major-version
+// transition never changes this constant — it widens SupportedMajors instead, per CW-0003 Unit 4.
 const CurrentMajor = 1
+
+// SupportedMajors is the small, explicit set of schema Majors save-time validation admits today
+// (CW-0003 Unit 4). It holds only CurrentMajor while no major-version transition is under way.
+// Widening it to name the next Major too is what makes parallel emission possible in practice:
+// content declaring the new Major can only be persisted, and so only ever reach payload.Build's
+// SupportsMajor-driven selection, once its Major is listed here. Narrowing it back to one entry is
+// the withdrawal Unit 4 describes, once the old Major's device share crosses the stated threshold.
+// This stays a short, explicit list rather than an open range — a Major absent from it is refused
+// exactly as before.
+var SupportedMajors = []int{CurrentMajor}
+
+// SupportsSchemaMajor reports whether major is one of SupportedMajors — the check save-time
+// validation runs against a variant's declared SchemaVersion before persisting it.
+func SupportsSchemaMajor(major int) bool {
+	for _, m := range SupportedMajors {
+		if m == major {
+			return true
+		}
+	}
+	return false
+}
 
 // SupportsMajor reports whether a device that declared support for declaredMajor can render content
 // carrying this version's Major — the check the delivery service runs per CW-0003 Unit 4's parallel

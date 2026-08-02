@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0006](CW-0006-payload-delta-sync.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **In progress** |
+| Status | **Implemented** |
 | Topic | Delivery model |
 | Related | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md), [CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema.md), [CW-0005](../CW-0005-segment-membership-index/CW-0005-segment-membership-index.md) |
 <!-- /CW-METADATA -->
@@ -159,19 +159,78 @@ ceiling looks like a project whose campaigns are underperforming.
 
 - [x] Unit 1 — Content-derived entity tag over the elements that determine the rendered result.
 - [x] Unit 2 — Conditional request with a per-channel tag cache serving the no-change path.
-- [ ] Unit 3 — Cursor-based delta with tombstones and a bounded change log, falling back to full.
-      Not built. Delta mode is off by default per this unit's own text, and a per-channel delta needs
-      to account for eligibility changes (a channel entering or leaving a segment) as well as content
-      edits, which is a materially harder problem than the full-payload path this pass ships. Deferred
-      rather than half-built.
-- [ ] Unit 4 — Two-tier assembly cache: shared bundle plus per-channel overlay.
-      Not built. The premise that motivated deferring this has changed since it was first written:
-      CW-0008's experiment and holdout assignment is now wired into payload assembly, so there is a
-      genuine per-channel part (which variant, or whether a channel is held out) to layer as an
-      overlay on a shared bundle. Still not building the cache split itself in this pass — it is a
-      performance optimization over a path with no measured cost problem yet, and adding it ahead of
-      that evidence is exactly the abstraction the implementation guardrails rule out — but the reason
-      to defer it is now "no measured need," not "nothing to split."
+- [x] Unit 3 — Cursor-based delta with tombstones and a bounded change log, falling back to full.
+      `internal/delivery/changelog` is the bounded log (`migrations/0013_delivery_change_log.sql`),
+      retained seven days and pruned opportunistically on write rather than by a scheduler this phase
+      doesn't have (`changelog.Retention`'s own comment gives the reasoning). `internal/delivery/cursor`
+      is the opaque token: a change log sequence, the channel's segment membership bitmap hash
+      (`internal/membership/reverse.Hash`, added for this and reused by Unit 4), and an issuance
+      timestamp. `internal/delivery/deliver`'s `computeDelta` composes the three: a membership hash
+      mismatch, a seq the log no longer covers, or an undecodable cursor all fall back to a full
+      payload and a fresh cursor, never an error. The per-channel eligibility problem this box's prior
+      note flagged — a channel entering or leaving a segment — is what the membership hash resolves:
+      the hash mismatch catches any such change, so the change log itself needs to track message-level
+      events alone, and the sole one that exists today is
+      `internal/platform/connectserver/admin.go`'s `UpdateMessageState` (`CreateMessage` always
+      creates in draft, never eligible, so it needs no entry). A message's delivery window opening
+      needs no change log write either — the cursor's own issuance timestamp against the message's
+      `window_start` catches it — and a window closing needs no tombstone at all, since
+      `payload.Entry.ExpiresAt` already carries CW-0002's self-expiry contract. Delta mode is gated by
+      `deliver.Config.DeltaModeEnabled`, off by default; no project entity exists yet to hold a
+      genuine per-project switch, so this is a phase-one stand-in matching how CW-0007's
+      `ProjectBudgetCap` already handles the same gap. Tested in
+      `internal/delivery/changelog/changelog_integration_test.go` (monotonic seq, the `Since` query,
+      pruning), `internal/delivery/cursor/cursor_test.go` (encode/decode, garbage never errors), and
+      `internal/delivery/deliver/deliver_integration_test.go` (a recent cursor gets only what changed,
+      a removed message gets a tombstone, a garbage or too-old cursor falls back to full, delta mode
+      off never produces a cursor) — plus
+      `internal/platform/connectserver/admin_integration_test.go`'s
+      `TestUpdateMessageStateRPCRecordsTheChangeLog` proving the real `UpdateMessageState` call site
+      writes it, not merely the isolated logic.
+- [x] Unit 4 — Two-tier assembly cache: shared bundle plus per-channel overlay.
+      `internal/delivery/payload/bundle.go` splits `Build`'s old single-pass assembly (`buildEntry`,
+      the function CW-0008's own Progress notes cite — its logic now lives in `toBundleMessage` and
+      `applyOverlay` below, though this pass does not update that other item's file) into
+      `assembleShared` (eligibility and content, cached as a `bundle` in Redis under
+      `delivery:bundle:<language>:<declaredMajor>:<membershipHash>` with no expiry, per this unit's
+      own text: "invalidated by campaign edits, not by time") and `applyOverlay` (CW-0008's variant
+      assignment and holdout, run fresh on every request regardless of cache hit or miss). The
+      bundle's shared inputs are language (`SyncRequest.language`), the channel's declared schema
+      major, and its segment membership bitmap hash (`internal/membership/reverse.Hash`, added for
+      this and shared with Unit 3's cursor). Two inputs this unit's text also names — platform and
+      application version — are not part of the key: neither exists as a typed, delivery-visible
+      field anywhere in this schema today ("app_version" exists only as an audience-predicate
+      attribute CW-0004's registry gates, with no production registry configuration in this
+      repository to read a canonical value from; "platform" does not exist at all), and, more to the
+      point, neither is an actual input to today's eligibility or content computation — `Build` never
+      branches on either — so omitting them from the key costs nothing today. If either becomes a
+      real content-selection input later, the key needs to grow to include it.
+
+      Invalidation is keyed by segment, not by campaign id. A message-id-keyed secondary index (the
+      option this unit's own instructions suggested) can only ever record bundles a message already
+      appears in, so a campaign the kill switch has just activated — never in any bundle before that
+      moment — would have no index entry to invalidate under, leaving every bundle already warm for
+      its audience segment stuck serving "not yet eligible" forever, since a bundle carries no
+      expiry. Indexing by segment (`delivery:bundle:segment-index:<segmentID>`, populated from the
+      full `segmentIDs` list `assembleShared` queried against, not just the segments its resulting
+      messages happen to carry) fixes this: a bundle is discoverable by every campaign that could
+      ever become relevant to it, not only the ones it already contains. `InvalidateCampaign` reads
+      but deliberately never deletes the index set itself, to avoid a race against a concurrent
+      cache-miss recomputation's own write — see the function's own comment for the full reasoning.
+      `internal/platform/connectserver/admin.go`'s `UpdateMessageState` calls it at the same trigger
+      point Unit 3's change log uses.
+
+      Tested in `internal/delivery/payload/bundle_integration_test.go`
+      (`TestBuildAppliesVariantAssignmentFreshPerChannelFromASharedBundle`: two channels sharing one
+      cached bundle still get their own CW-0008 assignment, not the first channel's replayed for the
+      second; `TestInvalidateCampaignDropsOnlyBundlesContainingTheEditedMessage`: editing one
+      campaign invalidates only the bundles reachable through its segment, leaving an unrelated
+      segment's bundle untouched) and
+      `internal/platform/connectserver/delivery_integration_test.go`'s
+      `TestUpdateMessageStateRPCInvalidatesTheChannelsCachedBundle` for the real `UpdateMessageState`
+      wiring end to end over HTTP. Every pre-existing `internal/delivery/payload` test continues to
+      pass unchanged, since `Build`'s external behavior is identical — only its internals now cache
+      the shared half.
 - [x] Unit 5 — Server-dictated interval with jitter, and exponential backoff with full jitter.
       The interval and jitter are CW-0002 Unit 3's `internal/delivery/sync` package, reused here
       unchanged and returned on every Sync response, including the unchanged path. Backoff is device

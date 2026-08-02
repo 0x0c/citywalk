@@ -6,3 +6,6 @@ __pycache__/
 
 # Protobuf codegen plugins built by `make tools`; rebuilt from the go.mod tool block on demand.
 /.tools/
+
+# Scratch worktrees the agent harness creates for background subagents.
+/.claude/worktrees/

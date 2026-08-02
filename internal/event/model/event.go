@@ -1,6 +1,7 @@
 // Package model implements CW-0009 Unit 1: the event envelope every measurement and targeting event
-// shares, and the closed sets (event kind, suppression reason) Unit 2's acceptance path validates
-// against.
+// shares, the closed sets (event kind, suppression reason) Unit 2's acceptance path validates
+// against, and the clock-offset tolerance the two-timestamp rule uses to decide when a device's
+// self-reported time can be trusted for anything ordering-sensitive.
 package model
 
 import (
@@ -159,4 +160,57 @@ func (e Event) EventName() string {
 		return e.Name
 	}
 	return string(e.Kind)
+}
+
+// Clock-offset tolerance for Unit 1's two-timestamp rule: how far a device-reported timestamp may
+// diverge from the server's receipt time before it is treated as untrustworthy rather than merely
+// late. docs/requirements.md's constraint #2 and its SDK responsibility #9 require that a device
+// whose offset "exceeds a threshold is detected and logged," but name no concrete threshold, so
+// these two are an engineering judgement call, documented here rather than left implicit:
+//
+//   - MaxFutureSkew is tight. There is no legitimate reason for a device's clock to read ahead of the
+//     server that just received the event by more than ordinary clock drift — a few minutes covers
+//     that generously — so anything past it is either a manipulated clock or a bug, not a real event
+//     from the future.
+//   - MaxPastSkew is loose. A real device accumulates events offline before it gets a chance to send
+//     them (Unit 1's own motivating case for keeping both timestamps), so the bound only needs to
+//     catch a clock that is simply wrong — stuck at an epoch default, or years off — rather than a
+//     long but genuine offline backlog.
+const (
+	MaxFutureSkew = 5 * time.Minute
+	MaxPastSkew   = 30 * 24 * time.Hour
+)
+
+// clockOffset is serverTime minus deviceTime: positive when the device is behind (the ordinary case,
+// including a genuine offline backlog), negative when the device's clock reads ahead of the server.
+func clockOffset(deviceTime, serverTime time.Time) time.Duration {
+	return serverTime.Sub(deviceTime)
+}
+
+// ClockSkewImplausible reports whether deviceTime diverges from serverTime by more than MaxFutureSkew
+// or MaxPastSkew — a clock reading into the future, or reporting a backlog implausibly older than any
+// real one. Acceptance (Unit 2) flags such an event rather than rejecting it, so the divergence is
+// observable (docs/requirements.md's "detected and logged") without adding a round trip to the
+// device; EffectiveTime is what keeps the event from being trusted verbatim downstream.
+func ClockSkewImplausible(deviceTime, serverTime time.Time) bool {
+	offset := clockOffset(deviceTime, serverTime)
+	return offset < -MaxFutureSkew || offset > MaxPastSkew
+}
+
+// EffectiveTime is the time Unit 1's two-timestamp rule treats as authoritative for anything
+// ordering- or bucketing-sensitive: deviceTime, unless ClockSkewImplausible says it cannot be
+// trusted, in which case serverTime — received directly by the server, not self-reported — takes
+// over. deviceTime itself is never altered; callers that need it for display or debugging keep
+// reading it as stored.
+//
+// This is deliberately conservative on the past side: an event within MaxPastSkew still buckets by
+// its own device time, since that is what "a late arrival lands in the day it belongs to" means. A
+// scheduled recomputation of the last several days' aggregates — so a bucket already written under an
+// earlier, incomplete read of the log gets corrected once the late arrival shows up — is still open
+// against Unit 1, pending the job queue/scheduler CW-0010 Unit 8 does not yet provide.
+func EffectiveTime(deviceTime, serverTime time.Time) time.Time {
+	if ClockSkewImplausible(deviceTime, serverTime) {
+		return serverTime
+	}
+	return deviceTime
 }

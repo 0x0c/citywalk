@@ -388,13 +388,13 @@ func TestBatchOnlySegmentMembershipReflectsRealEventRollups(t *testing.T) {
 		{ID: "01912d2c-0000-7000-9000-000000000002", ChannelID: activeChannel, Kind: model.KindCustom, Name: "route_screen_view", DeviceTime: now.Add(-30 * time.Hour)},
 		{ID: "01912d2c-0000-7000-9000-000000000003", ChannelID: activeChannel, Kind: model.KindCustom, Name: "route_screen_view", DeviceTime: now.Add(-100 * time.Hour)},
 	}
-	if _, err := ingest.Accept(ctx, pool, limiter, activeChannel, activeBatch, now); err != nil {
+	if _, err := ingest.Accept(ctx, ingest.PostgresPublisher{Pool: pool}, limiter, activeChannel, activeBatch, now); err != nil {
 		t.Fatalf("Accept (active): %v", err)
 	}
 	quietBatch := []model.Event{
 		{ID: "01912d2c-0000-7000-9000-000000000004", ChannelID: quietChannel, Kind: model.KindCustom, Name: "route_screen_view", DeviceTime: now.Add(-6 * time.Hour)},
 	}
-	if _, err := ingest.Accept(ctx, pool, limiter, quietChannel, quietBatch, now); err != nil {
+	if _, err := ingest.Accept(ctx, ingest.PostgresPublisher{Pool: pool}, limiter, quietChannel, quietBatch, now); err != nil {
 		t.Fatalf("Accept (quiet): %v", err)
 	}
 	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {

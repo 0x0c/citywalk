@@ -16,17 +16,32 @@ import (
 	"github.com/0x0c/citywalk/gen/citywalk/delivery/v1/deliveryv1connect"
 	"github.com/0x0c/citywalk/gen/citywalk/event/v1/eventv1connect"
 	"github.com/0x0c/citywalk/gen/citywalk/platform/v1/platformv1connect"
+	"github.com/0x0c/citywalk/internal/event/ingest"
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
+	"github.com/0x0c/citywalk/internal/platform/observability"
 )
 
+// serviceName identifies this process to the logger NewMux builds for its request-boundary logging,
+// matching the name main.go gives observability.Setup for traces and metrics (CW-0010 Unit 11: one
+// process, one service identity, in phase one).
+const serviceName = "citywalk-server"
+
 // NewMux builds the HTTP handler serving every Connect service the process hosts, instrumented with
-// OpenTelemetry so every request carries the trace and metric signals CW-0010 Unit 10 requires. pool
+// OpenTelemetry so every request carries the trace and metric signals CW-0010 Unit 10 requires, and
+// with loggingInterceptor so a handler error also reaches that unit's structured-log signal at the
+// same request boundary. pool
 // and redisClient may be nil (both are optional in phase one, per CW-0010 Unit 11). DeliveryService
 // is registered whenever pool is set, since Confirm needs only Postgres; Sync additionally needs
 // redisClient and reports so per call (see DeliveryServer.Sync) rather than the whole service being
 // unavailable for want of the one dependency Confirm doesn't need. EventService follows the same
 // pattern: registered whenever pool is set, with Submit itself reporting Unavailable if redisClient
 // is nil, since only the rate limit (not the log append) needs Redis.
+//
+// eventPublisher is where DeliveryService's and EventService's accepted events are written —
+// CW-0010 Unit 11's staged-adoption seam. A nil eventPublisher defaults to
+// ingest.PostgresPublisher{Pool: pool}, phase one's direct write to events_log; the caller passes a
+// non-nil one (e.g. ingest.LogPublisher) only when internal/platform/config's event publisher mode
+// selects the Kafka-compatible log instead.
 //
 // DeliveryService and EventService are additionally wrapped with deviceAuthInterceptor
 // (tokenSigningSecret), CW-0010 Unit 9's device authentication: every request through either service
@@ -41,27 +56,33 @@ func NewMux(
 	redisClient *redis.Client,
 	tokenSigningSecret []byte,
 	adminAuthenticator adminauth.Authenticator,
+	eventPublisher ingest.Publisher,
 ) (http.Handler, error) {
 	otelInterceptor, err := otelconnect.NewInterceptor()
 	if err != nil {
 		return nil, err
 	}
-	interceptors := connect.WithInterceptors(otelInterceptor)
+	logger := observability.NewLogger(serviceName)
+	interceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger))
+
+	if eventPublisher == nil && pool != nil {
+		eventPublisher = ingest.PostgresPublisher{Pool: pool}
+	}
 
 	mux := http.NewServeMux()
 	healthPath, healthHandler := platformv1connect.NewHealthServiceHandler(HealthServer{}, interceptors)
 	mux.Handle(healthPath, healthHandler)
 
 	if pool != nil && len(tokenSigningSecret) > 0 {
-		deviceInterceptors := connect.WithInterceptors(otelInterceptor, deviceAuthInterceptor(tokenSigningSecret))
+		deviceInterceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger), deviceAuthInterceptor(tokenSigningSecret))
 
 		deliveryPath, deliveryHandler := deliveryv1connect.NewDeliveryServiceHandler(
-			DeliveryServer{Pool: pool, Redis: redisClient}, deviceInterceptors,
+			DeliveryServer{Pool: pool, Redis: redisClient, Publisher: eventPublisher}, deviceInterceptors,
 		)
 		mux.Handle(deliveryPath, deliveryHandler)
 
 		eventPath, eventHandler := eventv1connect.NewEventServiceHandler(
-			EventServer{Pool: pool, Redis: redisClient}, deviceInterceptors,
+			EventServer{Publisher: eventPublisher, Redis: redisClient}, deviceInterceptors,
 		)
 		mux.Handle(eventPath, eventHandler)
 
@@ -72,9 +93,9 @@ func NewMux(
 	}
 
 	if pool != nil && adminAuthenticator != nil {
-		adminInterceptors := connect.WithInterceptors(otelInterceptor, adminAuthInterceptor(adminAuthenticator, adminRoleByProcedure))
+		adminInterceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger), adminAuthInterceptor(adminAuthenticator, adminRoleByProcedure))
 		adminPath, adminHandler := adminv1connect.NewAdminServiceHandler(
-			AdminServer{Pool: pool}, adminInterceptors,
+			AdminServer{Pool: pool, Redis: redisClient}, adminInterceptors,
 		)
 		mux.Handle(adminPath, adminHandler)
 	}
