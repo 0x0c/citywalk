@@ -7,7 +7,7 @@
 |---|---|
 | 提案 | [CW-0010](CW-0010-runtime-technology-stack-ja.md) |
 | 提案者 | [@0x0c](https://github.com/0x0c) |
-| 状態 | **提案** |
+| 状態 | **実装中** |
 | トピック | プラットフォーム |
 | 関連 | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope-ja.md)、[CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync-ja.md)、[CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics-ja.md) |
 <!-- /CW-METADATA -->
@@ -229,7 +229,17 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
 - [ ] ユニット6：ClickHouse の格納、集計、13か月の保持。
 - [ ] ユニット7：配信網の背後に置く、内容から導いた URL を持つオブジェクトストレージ。
 - [ ] ユニット8：PostgreSQL を土台とするジョブキューと、15分刻みのタイムゾーン区画。
-- [ ] ユニット9：チャネルを束縛する端末トークンと、認証基盤による認証および役割。
+- [x] ユニット9：チャネルを束縛する端末トークンと、認証基盤による認証および役割。
+      `internal/platform/devicetoken` がチャネルに束縛したトークンを発行・検証する。ChannelService
+      の Register と RefreshToken（`internal/channel/register`）がこれを配布する。DeliveryService と
+      EventService はインターセプタの背後にあり、トークンがないか無効なリクエストを拒み、すべての
+      リクエストをリクエスト本文のフィールドではなくトークンのチャネル識別子へ束縛する。管理側
+      （`internal/platform/adminauth`）は AdminService の背後で役割（閲覧者・編集者・管理者）により
+      認可し、すべての変更操作は `message_audit_log` に実行者を記した監査記録を残す。実際の外部認証
+      基盤との連携には、その基盤自身の設定（発行者、JSON Web Key Set（JWKS）エンドポイント、
+      クライアント ID）が要るが、本リポジトリはそれらを持たない。`StaticKeyAuthenticator` が、実際の
+      検証器と同じ `Authenticator` インターフェースの背後で代わりを務めており、後で差し替えても
+      呼び出し側には影響しない。
 - [ ] ユニット10：OpenTelemetry の信号と、基盤に固有の4つのメトリクス。
 - [ ] ユニット11：第1段階は単一プロセス、第2段階でログと列指向ストアを導入する。
 

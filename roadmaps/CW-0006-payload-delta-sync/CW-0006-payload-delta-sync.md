@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0006](CW-0006-payload-delta-sync.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Delivery model |
 | Related | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md), [CW-0003](../CW-0003-message-definition-schema/CW-0003-message-definition-schema.md), [CW-0005](../CW-0005-segment-membership-index/CW-0005-segment-membership-index.md) |
 <!-- /CW-METADATA -->
@@ -157,12 +157,30 @@ ceiling looks like a project whose campaigns are underperforming.
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — Content-derived entity tag over the elements that determine the rendered result.
-- [ ] Unit 2 — Conditional request with a per-channel tag cache serving the no-change path.
+- [x] Unit 1 — Content-derived entity tag over the elements that determine the rendered result.
+- [x] Unit 2 — Conditional request with a per-channel tag cache serving the no-change path.
 - [ ] Unit 3 — Cursor-based delta with tombstones and a bounded change log, falling back to full.
+      Not built. Delta mode is off by default per this unit's own text, and a per-channel delta needs
+      to account for eligibility changes (a channel entering or leaving a segment) as well as content
+      edits, which is a materially harder problem than the full-payload path this pass ships. Deferred
+      rather than half-built.
 - [ ] Unit 4 — Two-tier assembly cache: shared bundle plus per-channel overlay.
-- [ ] Unit 5 — Server-dictated interval with jitter, and exponential backoff with full jitter.
-- [ ] Unit 6 — Compression, the post-compression size ceiling, and the truncation metric.
+      Not built. The premise that motivated deferring this has changed since it was first written:
+      CW-0008's experiment and holdout assignment is now wired into payload assembly, so there is a
+      genuine per-channel part (which variant, or whether a channel is held out) to layer as an
+      overlay on a shared bundle. Still not building the cache split itself in this pass — it is a
+      performance optimization over a path with no measured cost problem yet, and adding it ahead of
+      that evidence is exactly the abstraction the implementation guardrails rule out — but the reason
+      to defer it is now "no measured need," not "nothing to split."
+- [x] Unit 5 — Server-dictated interval with jitter, and exponential backoff with full jitter.
+      The interval and jitter are CW-0002 Unit 3's `internal/delivery/sync` package, reused here
+      unchanged and returned on every Sync response, including the unchanged path. Backoff is device
+      behavior, out of scope for this repository the same way CW-0002 Unit 5 is.
+- [x] Unit 6 — Compression, the post-compression size ceiling, and the truncation metric.
+      Compression is inherent to the Connect protocol already in use: a Connect handler supports gzip
+      by default, negotiated from the request's headers, with no extra code. The size ceiling and the
+      truncation metric are CW-0002 Unit 2's, now labeled by language so the metric names a cohort
+      rather than only a count.
 
 ## References
 

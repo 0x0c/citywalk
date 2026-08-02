@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0002](CW-0002-hybrid-delivery-model.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Delivery model |
 | Related | [CW-0001](../CW-0001-in-app-message-platform-scope/CW-0001-in-app-message-platform-scope.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md), [CW-0007](../CW-0007-display-governance/CW-0007-display-governance.md) |
 <!-- /CW-METADATA -->
@@ -164,11 +164,23 @@ which fails closed by design.
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — The boundary rule, encoded so that a definition cannot place a condition on the wrong side.
-- [ ] Unit 2 — The payload contract: complete, self-expiring, size-capped, audience-free.
-- [ ] Unit 3 — Server-dictated synchronization interval, jitter, and the kill switch.
-- [ ] Unit 4 — The server confirmation endpoint, failing closed, visible per campaign.
+- [x] Unit 1 — The boundary rule, encoded so that a definition cannot place a condition on the wrong side.
+- [x] Unit 2 — The payload contract: complete, self-expiring, size-capped, audience-free.
+- [x] Unit 3 — Server-dictated synchronization interval, jitter, and the kill switch.
+      The interval and jitter are implemented and tested. The kill switch needs no separate
+      invalidation step yet: nothing caches an assembled payload today (CW-0006's job), so every
+      build already reads the message's live state and a paused or archived campaign is excluded
+      the moment its state changes, faster than the one-interval bound this unit promises.
+- [x] Unit 4 — The server confirmation endpoint, failing closed, visible per campaign.
+      The endpoint, the fail-closed contract, and the per-campaign flag are implemented and tested
+      end to end over a real Connect RPC call. "Visible" here means the flag exists on the schema a
+      campaign can set; an administrative interface that surfaces it to a human is CW-0001 Unit 1's
+      job and isn't built yet.
 - [ ] Unit 5 — Degradation behavior for a platform outage and for an offline device.
+      Out of scope for this repository, not merely unbuilt: both behaviors describe the client SDK,
+      which `docs/requirements.md` names as permanently out of scope. What the server owes this
+      unit — a payload that needs no follow-up call and expires on its own — is already true of the
+      Unit 2 payload contract; there is no further server-side code this unit adds.
 
 ## References
 

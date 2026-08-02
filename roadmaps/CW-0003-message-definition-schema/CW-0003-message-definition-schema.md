@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0003](CW-0003-message-definition-schema.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Delivery model |
 | Related | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md), [CW-0006](../CW-0006-payload-delta-sync/CW-0006-payload-delta-sync.md) |
 <!-- /CW-METADATA -->
@@ -147,11 +147,25 @@ the person who can fix it, while a rejection at delivery reaches a device and no
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — The five entities and the message-to-variant split.
-- [ ] Unit 2 — Content as a tagged union over layouts, with actions as a nested union.
-- [ ] Unit 3 — Relational columns for queried fields, one JSON document per variant for content.
+- [x] Unit 1 — The five entities and the message-to-variant split.
+- [x] Unit 2 — Content as a tagged union over layouts, with actions as a nested union.
+- [x] Unit 3 — Relational columns for queried fields, one JSON document per variant for content.
 - [ ] Unit 4 — Schema versioning, additive-only minor changes, parallel emission across a major.
+      Versioning, the compatibility check, and the mechanism parallel emission needs are now wired
+      end to end: a device declares its supported major at registration (CW-0010 Unit 9's Register),
+      and `payload.Build` reads it back and excludes any variant `SchemaVersion.SupportsMajor` rejects
+      before selection ever reaches language or experiment assignment — a device gets no entry for a
+      message with no compatible variant, the same as a channel that never qualified. Left unchecked
+      because there is still nothing to actually emit in parallel: save-time validation
+      (`validateSchemaVersion`) admits only `model.CurrentMajor`, so a second major's content can
+      never be persisted yet, and parallel emission is a mechanism proven against one major rather
+      than a live behavior across two.
 - [ ] Unit 5 — Save-time validation covering shape, references, time, weights, and content security.
+      Shape, temporal sanity, weights, content security, and audience referential integrity (a
+      non-empty `audience_ref` must name a real row in `segments`) are implemented and tested.
+      Conversion event and media referential integrity are not — the conversion event catalog has no
+      owner yet, and media existence depends on the object storage CW-0010 Unit 7 defers to a later
+      phase, so neither exists as a queryable store yet.
 
 ## References
 

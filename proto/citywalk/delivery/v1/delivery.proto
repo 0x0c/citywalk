@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package citywalk.delivery.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/0x0c/citywalk/gen/citywalk/delivery/v1;deliveryv1";
+
+// DeliveryService is the device-facing surface CW-0002 and CW-0006 describe: the payload
+// synchronization endpoint (CW-0006) and the server confirmation escape hatch (CW-0002 Unit 4).
+service DeliveryService {
+  // Sync answers a channel's synchronization request (CW-0006 Unit 2): when etag matches what the
+  // server would compute, it returns Unchanged with no entries — the conditional request's whole
+  // point is that this path costs a cache lookup, not a full payload assembly.
+  rpc Sync(SyncRequest) returns (SyncResponse);
+
+  // Confirm answers whether a server-confirmed message may display right now. The device calls this
+  // immediately before displaying and shows the message only on Approved == true: a timeout or an
+  // error suppresses the display rather than allowing it.
+  rpc Confirm(ConfirmRequest) returns (ConfirmResponse);
+}
+
+message SyncRequest {
+  // channel_id is accepted for the wire shape but never trusted: CW-0010 Unit 9's device auth
+  // interceptor binds the caller's channel identity to its verified bearer token, and the handler
+  // acts on that identity regardless of what channel_id names here — naming another channel's
+  // identifier grants nothing.
+  string channel_id = 1;
+  string language = 2;
+  // etag is the tag the device's current payload was served with, empty on first synchronization.
+  string etag = 3;
+}
+
+// Entry is the wire projection of internal/delivery/payload.Entry. Trigger, DisplayCondition, and
+// ControlPolicy travel as JSON rather than as their own nested messages: the client SDK that would
+// consume this wire format is permanently out of scope for this repository
+// (docs/requirements.md), so finalizing a second, protobuf-native schema for entities CW-0003
+// already models in Go is deferred until something in-repo actually needs to decode them.
+message Entry {
+  string message_id = 1;
+  int32 version = 2;
+  string variant_id = 3;
+  int32 schema_version_major = 4;
+  int32 schema_version_minor = 5;
+  int32 priority = 6;
+  // content is the same wire document CW-0003's Variant.MarshalContentColumn produces.
+  bytes content = 7;
+  bytes triggers_json = 8;
+  bytes display_conditions_json = 9;
+  bytes control_policy_json = 10;
+  google.protobuf.Timestamp expires_at = 11;
+}
+
+message SyncResponse {
+  bool unchanged = 1;
+  string etag = 2;
+  // entries is empty when unchanged is true.
+  repeated Entry entries = 3;
+  google.protobuf.Timestamp next_sync_at = 4;
+  // project_budget_remaining is CW-0007 Unit 5's issuance: the estimated remaining project-wide
+  // impression budget as of this assembly. Absent (not just zero) when no budget is configured for
+  // this synchronization — proto3 `optional` carries that distinction across the wire.
+  optional int32 project_budget_remaining = 5;
+}
+
+message ConfirmRequest {
+  // channel_id is accepted for FR-API-08's wire shape but never trusted: CW-0010 Unit 9's device
+  // auth interceptor binds the channel identity to the authenticated request's token, and
+  // checkProjectBudget uses that identity, not whatever this field names.
+  string channel_id = 1;
+  string message_id = 2;
+}
+
+message ConfirmResponse {
+  bool approved = 1;
+}

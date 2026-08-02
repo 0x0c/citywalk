@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0007](CW-0007-display-governance.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Display governance |
 | Related | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md), [CW-0009](../CW-0009-event-ingestion-analytics/CW-0009-event-ingestion-analytics.md) |
 <!-- /CW-METADATA -->
@@ -163,11 +163,33 @@ reason produces a report nobody can group.
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
 - [ ] Unit 1 — Device-side per-message counters on a monotonic clock, with drift reporting.
+      Permanently out of scope for this repository: client SDK behavior (`docs/requirements.md`).
 - [ ] Unit 2 — Deterministic priority resolution, the single display slot, and the cooldown.
+      Permanently out of scope for this repository: client SDK behavior.
 - [ ] Unit 3 — Candidate lifecycle: discard by default, optional hold, cancellation triggers.
-- [ ] Unit 4 — Approximate sliding-window counter for the project-wide cap, updated atomically.
-- [ ] Unit 5 — Budget issuance in the payload, device-side spending, and server reconciliation.
-- [ ] Unit 6 — The strict confirmation endpoint and closed-set suppression telemetry.
+      Permanently out of scope for this repository: client SDK behavior.
+- [x] Unit 4 — Approximate sliding-window counter for the project-wide cap, updated atomically.
+      `internal/governance/budget` implements the two-bucket estimate exactly as specified — a single
+      atomic Redis script performs the rollover check and the increment together — and is tested for
+      the cap boundary, per-identity isolation, and the previous bucket's weight decaying across a
+      window boundary.
+- [x] Unit 5 — Budget issuance in the payload, device-side spending, and server reconciliation.
+      Issuance and reconciliation (the two server-side halves) are implemented and tested end to end:
+      `deliver.Sync` attaches the remaining budget to every freshly assembled payload
+      (`payload.Payload.ProjectBudgetRemaining`, wired onto `SyncResponse` as a proto3 `optional`
+      field), and CW-0009's rollup consumer reconciles the counter from every reported impression.
+      Device-side spending is permanently out of scope (client SDK behavior); there is also no project
+      entity in this schema yet, so the counter is scoped per channel identifier directly rather than
+      per (project, identity) — a future project entity narrows the key without changing this package.
+- [x] Unit 6 — The strict confirmation endpoint and closed-set suppression telemetry.
+      The atomic check-and-decrement is implemented as a layer on top of CW-0002 Unit 4's existing
+      `confirm.Confirm` (composed in the Connect handler rather than folded into `confirm.Confirm`
+      itself, keeping message eligibility and budget enforcement as separately owned checks), including
+      the exemption bypass, and tested end to end over a real Connect RPC call: two devices sharing a
+      channel cannot receive more than the cap, and exhaustion emits a `project_budget` suppression
+      event through CW-0009's pipeline. `project_budget` is the only one of the eight closed-set
+      reasons a server-side decision in this repository can ever produce — the other seven name
+      device-side decisions (Units 1 through 3) this repository does not make.
 
 ## References
 

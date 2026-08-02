@@ -7,7 +7,7 @@
 |---|---|
 | Proposal | [CW-0004](CW-0004-audience-predicate-engine.md) |
 | Author | [@0x0c](https://github.com/0x0c) |
-| Status | **Proposal** |
+| Status | **In progress** |
 | Topic | Targeting |
 | Related | [CW-0002](../CW-0002-hybrid-delivery-model/CW-0002-hybrid-delivery-model.md), [CW-0005](../CW-0005-segment-membership-index/CW-0005-segment-membership-index.md) |
 <!-- /CW-METADATA -->
@@ -157,12 +157,23 @@ second is the honest answer at small sample sizes.
 
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
-- [ ] Unit 1 — The typed attribute registry, including the confidentiality flag.
-- [ ] Unit 2 — Predicate storage as a serialized tree, with the source kept for display.
-- [ ] Unit 3 — Row-wise evaluation with a compilation cache keyed by tree hash.
-- [ ] Unit 4 — Tree-to-SQL compilation and the two-backend conformance suite.
+- [x] Unit 1 — The typed attribute registry, including the confidentiality flag.
+- [x] Unit 2 — Predicate storage as a serialized tree, with the source kept for display.
+- [x] Unit 3 — Row-wise evaluation with a compilation cache keyed by tree hash.
+- [x] Unit 4 — Tree-to-SQL compilation and the two-backend conformance suite.
 - [ ] Unit 5 — Event aggregate rollups and windowed conditions over daily buckets.
-- [ ] Unit 6 — Sampled reach estimation reporting a confidence interval.
+      Rollup maintenance (CW-0009's `targeting_rollup`, now that CW-0009 exists) and the windowed-sum
+      evaluation are both implemented and tested against real Postgres, on both backends: `sqlcompile`
+      compiles an event-aggregate attribute into a correlated subquery against `targeting_rollup`
+      (`internal/audience/sqlcompile`), and `reach` merges the same sums into the row-wise evaluator's
+      attribute map (`internal/audience/reach`) — verified end to end from real submitted events
+      through CW-0009's consumer to a `batch_only` segment's membership. Not implemented: the
+      type-checker rule rejecting a condition asking for finer precision than the rollup carries.
+      `AggregateGranularity` today only ever names `"day"`, and a definition's window is always a
+      whole number of days, so nothing in the predicate language can currently ask for anything finer
+      — this rejection becomes a real check only once a second, finer granularity exists for a
+      predicate to ask for by mistake.
+- [x] Unit 6 — Sampled reach estimation reporting a confidence interval.
 
 ## References
 

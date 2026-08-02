@@ -3,3 +3,6 @@
 
 __pycache__/
 *.pyc
+
+# Protobuf codegen plugins built by `make tools`; rebuilt from the go.mod tool block on demand.
+/.tools/

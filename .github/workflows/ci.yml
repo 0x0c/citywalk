@@ -1,0 +1,109 @@
+# The mechanical gate every Go change must pass (.agent-workflows/implement/workflow.md step 7):
+# gofmt, go vet, golangci-lint, build, and both the unit and Postgres-backed integration test
+# suites. Nothing merges past a red run here.
+name: CI
+
+on:
+  push:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - "proto/**"
+      - "migrations/**"
+      - ".golangci.yml"
+      - "Makefile"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - "proto/**"
+      - "migrations/**"
+      - ".golangci.yml"
+      - "Makefile"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: gofmt, vet, lint, build, test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: citywalk
+          POSTGRES_PASSWORD: citywalk
+          POSTGRES_DB: citywalk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U citywalk"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        # v7 is required for a v2 golangci-lint (our .golangci.yml is the v2 config format); v6
+        # only knows how to install golangci-lint v1.
+        uses: golangci/golangci-lint-action@v7
+        with:
+          # Pinned rather than "latest": golangci-lint's own toolchain must be built with a Go at
+          # least as new as go.mod's `go` directive, and letting the action pick can hand us a
+          # cached older binary that rejects a newer directive outright.
+          version: v2.5.0
+
+      - name: Regenerate protobuf code and diff against the committed gen/
+        run: |
+          make generate
+          git diff --exit-code -- gen/
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test (unit)
+        run: go test ./...
+
+      - name: go test (integration)
+        env:
+          CITYWALK_TEST_POSTGRES_DSN: postgres://citywalk:citywalk@localhost:5432/citywalk_test?sslmode=disable
+          CITYWALK_TEST_REDIS_ADDR: localhost:6379
+        # -p 1: every integration suite shares the one Postgres and Redis instance above, and more
+        # than one package truncates shared tables (e.g. channels) as test setup. Go runs different
+        # packages' tests in parallel by default, which races those truncations against each other;
+        # -p 1 serializes package execution so each suite's setup and assertions hold.
+        run: go test -tags=integration -p 1 ./...
