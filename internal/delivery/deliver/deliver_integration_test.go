@@ -19,6 +19,7 @@ import (
 	"github.com/0x0c/citywalk/internal/delivery/changelog"
 	"github.com/0x0c/citywalk/internal/delivery/cursor"
 	"github.com/0x0c/citywalk/internal/delivery/deliver"
+	"github.com/0x0c/citywalk/internal/delivery/payload"
 	"github.com/0x0c/citywalk/internal/membership/batch"
 	"github.com/0x0c/citywalk/internal/membership/ordinal"
 	"github.com/0x0c/citywalk/internal/membership/reverse"
@@ -148,12 +149,15 @@ func setUpChannelAndSegment(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 
 // insertActiveMessageAndRecordUpsert inserts msg directly active in segmentID (bypassing
 // AdminService's forced-draft CreateMessage, the same shortcut every other delivery-path test in
-// this repository already takes) and writes CW-0006 Unit 3's change log row a real
-// AdminService.UpdateMessageState call would have written — internal/platform/connectserver/admin.go
-// is the actual hook (integration-tested separately in that package); this helper only needs the
-// change log's own effect, not a second proof that the wiring exists.
+// this repository already takes) and reproduces both of CW-0006's own write hooks a real
+// AdminService.UpdateMessageState call would have run — Unit 3's change log row and Unit 4's bundle
+// cache invalidation — since internal/platform/connectserver/admin.go now populates a bundle cache
+// (CW-0006 Unit 4) that these tests must keep consistent with or a stale cached bundle, not the
+// change log, would answer the second Sync call. admin.go's own wiring is integration-tested
+// separately in that package; this helper only needs both hooks' effects, not a second proof that
+// the wiring exists.
 func insertActiveMessageAndRecordUpsert(
-	t *testing.T, ctx context.Context, pool *pgxpool.Pool, segmentID, heading string, now time.Time,
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, redisClient *redis.Client, segmentID, heading string, now time.Time,
 ) string {
 	t.Helper()
 	msg := &model.Message{
@@ -171,6 +175,9 @@ func insertActiveMessageAndRecordUpsert(
 	if err := changelog.Record(ctx, pool, msg.ID, changelog.KindUpsert, now); err != nil {
 		t.Fatalf("changelog.Record(%s): %v", heading, err)
 	}
+	if err := payload.InvalidateCampaign(ctx, pool, redisClient, msg.ID); err != nil {
+		t.Fatalf("InvalidateCampaign(%s): %v", heading, err)
+	}
 	return msg.ID
 }
 
@@ -183,7 +190,7 @@ func TestSyncDeltaModeGivesAFullPayloadAndAFreshCursorOnFirstRequest(t *testing.
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
-	insertActiveMessageAndRecordUpsert(t, ctx, pool, segmentID, "Hi", now)
+	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Hi", now)
 
 	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, deltaTestConfig())
 	if err != nil {
@@ -209,7 +216,7 @@ func TestSyncDeltaModeReturnsOnlyTheChangedEntry(t *testing.T) {
 	cfg := deltaTestConfig()
 
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
-	insertActiveMessageAndRecordUpsert(t, ctx, pool, segmentID, "Unchanged", now)
+	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Unchanged", now)
 
 	first, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, cfg)
 	if err != nil {
@@ -220,7 +227,7 @@ func TestSyncDeltaModeReturnsOnlyTheChangedEntry(t *testing.T) {
 	}
 
 	later := now.Add(time.Minute)
-	newMessageID := insertActiveMessageAndRecordUpsert(t, ctx, pool, segmentID, "New", later)
+	newMessageID := insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "New", later)
 
 	// A deliberately stale ETag, not first.ETag: the per-channel tag cache (CW-0006 Unit 2) has a
 	// real 30-second TTL measured in wall-clock time, which this test's simulated business clock
@@ -255,7 +262,7 @@ func TestSyncDeltaModeReturnsATombstoneForARemovedMessage(t *testing.T) {
 	cfg := deltaTestConfig()
 
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
-	messageID := insertActiveMessageAndRecordUpsert(t, ctx, pool, segmentID, "Will be paused", now)
+	messageID := insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Will be paused", now)
 
 	first, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, cfg)
 	if err != nil {
@@ -271,6 +278,11 @@ func TestSyncDeltaModeReturnsATombstoneForARemovedMessage(t *testing.T) {
 	}
 	if err := changelog.Record(ctx, pool, messageID, changelog.KindTombstone, later); err != nil {
 		t.Fatalf("changelog.Record: %v", err)
+	}
+	// CW-0006 Unit 4's own hook, alongside Unit 3's — see insertActiveMessageAndRecordUpsert's own
+	// comment on why both must run together in these tests.
+	if err := payload.InvalidateCampaign(ctx, pool, redisClient, messageID); err != nil {
+		t.Fatalf("InvalidateCampaign: %v", err)
 	}
 
 	// A deliberately stale ETag, not first.ETag — see TestSyncDeltaModeReturnsOnlyTheChangedEntry's
@@ -299,7 +311,7 @@ func TestSyncDeltaModeFallsBackToFullOnAnUnrecognizedCursor(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
-	insertActiveMessageAndRecordUpsert(t, ctx, pool, segmentID, "Hi", now)
+	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Hi", now)
 
 	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "garbage-not-a-real-cursor", now, deltaTestConfig())
 	if err != nil {
@@ -326,7 +338,7 @@ func TestSyncDeltaModeFallsBackToFullWhenTheCursorPredatesTheRetentionWindow(t *
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
-	insertActiveMessageAndRecordUpsert(t, ctx, pool, segmentID, "Hi", now)
+	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Hi", now)
 
 	membershipBM, err := reverse.Get(ctx, redisClient, channelID)
 	if err != nil {
@@ -362,7 +374,7 @@ func TestSyncDeltaModeDisabledNeverProducesADeltaOrACursor(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
-	insertActiveMessageAndRecordUpsert(t, ctx, pool, segmentID, "Hi", now)
+	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Hi", now)
 
 	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "some-cursor-that-is-ignored", now, testConfig())
 	if err != nil {

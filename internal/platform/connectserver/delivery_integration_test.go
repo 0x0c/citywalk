@@ -14,7 +14,10 @@ import (
 	"connectrpc.com/connect"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	adminv1 "github.com/0x0c/citywalk/gen/citywalk/admin/v1"
+	"github.com/0x0c/citywalk/gen/citywalk/admin/v1/adminv1connect"
 	deliveryv1 "github.com/0x0c/citywalk/gen/citywalk/delivery/v1"
 	"github.com/0x0c/citywalk/gen/citywalk/delivery/v1/deliveryv1connect"
 	"github.com/0x0c/citywalk/internal/audience/audiencetest"
@@ -308,6 +311,125 @@ func TestSyncRPCReturnsAPayloadThenUnchanged(t *testing.T) {
 	}
 }
 
+// TestUpdateMessageStateRPCInvalidatesTheChannelsCachedBundle exercises CW-0006 Unit 4's real wiring
+// end to end over HTTP: a channel's first synchronization caches a bundle containing an active
+// campaign; pausing that campaign through the real AdminService RPC must invalidate that bundle, so
+// the channel's very next synchronization reflects the pause rather than serving the stale cached
+// content indefinitely (this bundle carries no expiry — CW-0006 Unit 4's "invalidated by campaign
+// edits, not by time" — so nothing but the invalidation itself would ever remove it).
+func TestUpdateMessageStateRPCInvalidatesTheChannelsCachedBundle(t *testing.T) {
+	pgDSN := os.Getenv("CITYWALK_TEST_POSTGRES_DSN")
+	redisAddr := os.Getenv("CITYWALK_TEST_REDIS_ADDR")
+	if pgDSN == "" || redisAddr == "" {
+		t.Skip("CITYWALK_TEST_POSTGRES_DSN and CITYWALK_TEST_REDIS_ADDR must both be set")
+	}
+	ctx := context.Background()
+	pool, err := postgres.NewPool(ctx, pgDSN)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := postgres.Migrate(ctx, pool, migrations.FS); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	redisClient, err := redisclient.New(ctx, redisAddr)
+	if err != nil {
+		t.Fatalf("redisclient.New: %v", err)
+	}
+	t.Cleanup(func() { _ = redisClient.Close() })
+	for _, table := range []string{"conversion_attributions", "message_audit_log", "delivery_change_log", "events_log", "segment_membership", "segments", "channel_ordinals", "channels", "messages"} {
+		if _, err := pool.Exec(ctx, "DELETE FROM "+table); err != nil {
+			t.Fatalf("clear %s: %v", table, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE membership_generation SET generation = 0`); err != nil {
+		t.Fatalf("reset generation: %v", err)
+	}
+	if err := redisClient.FlushDB(ctx).Err(); err != nil {
+		t.Fatalf("flush redis: %v", err)
+	}
+
+	now := time.Now()
+	channelID, token := registerTestChannel(t, ctx, pool, map[string]any{"country": "JP"})
+	env, err := audiencetest.Env()
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	reg := audiencetest.Registry()
+	seg, err := segment.Save(ctx, pool, env, reg, "Japan", `country == "JP"`)
+	if err != nil {
+		t.Fatalf("segment.Save: %v", err)
+	}
+	// Segment membership (CW-0005) only updates on a recomputation; message eligibility depends on
+	// it regardless of when the message itself is created, so this must run before the first Sync.
+	if _, err := batch.Recompute(ctx, pool, redisClient, reg); err != nil {
+		t.Fatalf("batch.Recompute: %v", err)
+	}
+
+	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator)
+	if err != nil {
+		t.Fatalf("NewMux: %v", err)
+	}
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	adminClient := adminv1connect.NewAdminServiceClient(server.Client(), server.URL)
+	deliveryClient := deliveryv1connect.NewDeliveryServiceClient(server.Client(), server.URL)
+
+	created, err := adminClient.CreateMessage(ctx, adminAuthed(connect.NewRequest(&adminv1.CreateMessageRequest{
+		Message: &adminv1.MessageDefinition{
+			Name:        "Bundle invalidation",
+			WindowStart: timestamppb.New(now.Add(-time.Hour)),
+			WindowEnd:   timestamppb.New(now.Add(time.Hour)),
+			AudienceRef: seg.ID,
+			VariantsJson: []byte(`[{
+				"id": "", "weight": 100, "language": "en",
+				"content_column": {
+					"schema_version": {"major": 1, "minor": 0},
+					"content": {"layout": "dialog", "heading": "", "body": "", "colors": {"background": "", "text": ""}, "corner_radius": 0}
+				}
+			}]`),
+		},
+	}), "test-editor-key"))
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	messageID := created.Msg.GetMessageId()
+
+	if _, err := adminClient.UpdateMessageState(ctx, adminAuthed(connect.NewRequest(&adminv1.UpdateMessageStateRequest{
+		MessageId: messageID, NewState: "active",
+	}), "test-editor-key")); err != nil {
+		t.Fatalf("UpdateMessageState (activate): %v", err)
+	}
+
+	first, err := deliveryClient.Sync(ctx, authed(connect.NewRequest(&deliveryv1.SyncRequest{ChannelId: channelID, Language: "en"}), token))
+	if err != nil {
+		t.Fatalf("Sync (before pause): %v", err)
+	}
+	if len(first.Msg.GetEntries()) != 1 || first.Msg.GetEntries()[0].GetMessageId() != messageID {
+		t.Fatalf("Sync (before pause) entries = %+v, want exactly %s", first.Msg.GetEntries(), messageID)
+	}
+
+	if _, err := adminClient.UpdateMessageState(ctx, adminAuthed(connect.NewRequest(&adminv1.UpdateMessageStateRequest{
+		MessageId: messageID, NewState: "paused",
+	}), "test-editor-key")); err != nil {
+		t.Fatalf("UpdateMessageState (pause): %v", err)
+	}
+
+	// A deliberately mismatched ETag: the per-channel tag cache (CW-0006 Unit 2) has a real
+	// wall-clock TTL this test's near-instant run never crosses, so reusing first's real tag would
+	// short-circuit into Unchanged before ever reaching the bundle this test is about.
+	second, err := deliveryClient.Sync(ctx, authed(connect.NewRequest(&deliveryv1.SyncRequest{
+		ChannelId: channelID, Language: "en", Etag: "stale-etag-from-before",
+	}), token))
+	if err != nil {
+		t.Fatalf("Sync (after pause): %v", err)
+	}
+	if len(second.Msg.GetEntries()) != 0 {
+		t.Errorf("Sync (after pause) entries = %+v, want none — UpdateMessageState's InvalidateCampaign "+
+			"call should have dropped the bundle caching this now-paused message", second.Msg.GetEntries())
+	}
+}
+
 func strictConfirmTestDeps(t *testing.T) (*pgxpool.Pool, *redis.Client) {
 	t.Helper()
 	pgDSN := os.Getenv("CITYWALK_TEST_POSTGRES_DSN")
@@ -329,7 +451,7 @@ func strictConfirmTestDeps(t *testing.T) (*pgxpool.Pool, *redis.Client) {
 		t.Fatalf("redisclient.New: %v", err)
 	}
 	t.Cleanup(func() { _ = redisClient.Close() })
-	for _, table := range []string{"conversion_attributions", "delivery_change_log", "events_log", "channels", "messages"} {
+	for _, table := range []string{"conversion_attributions", "message_audit_log", "delivery_change_log", "events_log", "channels", "messages"} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("clear %s: %v", table, err)
 		}

@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	adminv1 "github.com/0x0c/citywalk/gen/citywalk/admin/v1"
@@ -16,6 +17,7 @@ import (
 	"github.com/0x0c/citywalk/internal/definition/store"
 	"github.com/0x0c/citywalk/internal/definition/validate"
 	"github.com/0x0c/citywalk/internal/delivery/changelog"
+	"github.com/0x0c/citywalk/internal/delivery/payload"
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
 )
 
@@ -23,6 +25,11 @@ import (
 // surface, authenticated and role-checked by adminAuthInterceptor before any of these methods runs.
 type AdminServer struct {
 	Pool *pgxpool.Pool
+	// Redis is CW-0006 Unit 4's campaign-keyed bundle cache invalidation. Optional, matching every
+	// other Redis-backed feature in this phase (CW-0010 Unit 11): nil simply means an edit's stale
+	// bundles are not proactively dropped, the same per-dependency degradation DeliveryServer.Sync
+	// and EventServer.Submit already apply to their own Redis-backed features.
+	Redis *redis.Client
 }
 
 func (s AdminServer) CreateMessage(
@@ -85,6 +92,16 @@ func (s AdminServer) UpdateMessageState(
 	// succeeds, writing the change log entry it was missing.
 	if err := changelog.Record(ctx, s.Pool, req.Msg.GetMessageId(), kind, now); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	// CW-0006 Unit 4's campaign-keyed bundle cache invalidation: the same trigger point as the
+	// change log write above, since this is the only mutation that can change what a bundle
+	// containing this message would compute. Skipped, not failed, when Redis is unset — see
+	// AdminServer.Redis's own doc comment on why that is safe in this phase.
+	if s.Redis != nil {
+		if err := payload.InvalidateCampaign(ctx, s.Pool, s.Redis, req.Msg.GetMessageId()); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
 	}
 
 	return connect.NewResponse(&adminv1.UpdateMessageStateResponse{State: string(newState)}), nil

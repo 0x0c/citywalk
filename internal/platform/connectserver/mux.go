@@ -83,7 +83,7 @@ func NewMux(
 	if pool != nil && adminAuthenticator != nil {
 		adminInterceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger), adminAuthInterceptor(adminAuthenticator, adminRoleByProcedure))
 		adminPath, adminHandler := adminv1connect.NewAdminServiceHandler(
-			AdminServer{Pool: pool}, adminInterceptors,
+			AdminServer{Pool: pool, Redis: redisClient}, adminInterceptors,
 		)
 		mux.Handle(adminPath, adminHandler)
 	}
