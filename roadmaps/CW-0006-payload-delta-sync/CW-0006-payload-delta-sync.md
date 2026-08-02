@@ -160,7 +160,7 @@ ceiling looks like a project whose campaigns are underperforming.
 - [x] Unit 1 — Content-derived entity tag over the elements that determine the rendered result.
 - [x] Unit 2 — Conditional request with a per-channel tag cache serving the no-change path.
 - [x] Unit 3 — Cursor-based delta with tombstones and a bounded change log, falling back to full.
-      `internal/delivery/changelog` is the bounded log (`migrations/0011_delivery_change_log.sql`),
+      `internal/delivery/changelog` is the bounded log (`migrations/0013_delivery_change_log.sql`),
       retained seven days and pruned opportunistically on write rather than by a scheduler this phase
       doesn't have (`changelog.Retention`'s own comment gives the reasoning). `internal/delivery/cursor`
       is the opaque token: a change log sequence, the channel's segment membership bitmap hash

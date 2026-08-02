@@ -149,7 +149,7 @@ citywalk が想定する規模では、基盤は1日およそ 600 万回の同�
 - [x] ユニット1：描画結果を決める要素から導くエンティティタグ。
 - [x] ユニット2：チャネルごとのタグキャッシュが応える、条件付きリクエストの変化なし経路。
 - [x] ユニット3：墓標と上限付き変更ログを備え、完全なペイロードへ落ちられるカーソル方式の差分。
-      `internal/delivery/changelog` が上限付き変更ログです（`migrations/0011_delivery_change_log.sql`）。
+      `internal/delivery/changelog` が上限付き変更ログです（`migrations/0013_delivery_change_log.sql`）。
       保持期間は7日で、この段階にはまだ持たないスケジューラの代わりに、書き込みのたびに機会的に
       刈り込みます（理由は `changelog.Retention` 自身のコメントに書いてあります）。
       `internal/delivery/cursor` が不透明なトークンで、変更ログの通し番号、チャネルのセグメント
