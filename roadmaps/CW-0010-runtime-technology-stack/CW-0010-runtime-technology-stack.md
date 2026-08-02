@@ -85,9 +85,11 @@ HTTP requests — no gRPC runtime on the device, and every proxy and debugging t
 works — while internal service-to-service calls use the binary protocol. One schema generating
 both sides removes the hand-written client that otherwise drifts from the server.
 
-Libraries settled by this item: `pgx` with `sqlc` for database access, `go-redis`, `franz-go` for the
-log, `clickhouse-go`, `cel-go` for predicates, `roaring` for bitmaps, `river` for the job queue, and
-the OpenTelemetry Go modules for observability.
+Libraries settled by this item: `pgx` for database access, `go-redis`, `franz-go` for the log,
+`clickhouse-go`, `cel-go` for predicates, `roaring` for bitmaps, `river` for the job queue, and the
+OpenTelemetry Go modules for observability. Queries go straight through `pgx`, not through `sqlc`'s
+generated layer. The query surface this platform writes has stayed small and hand-written. A
+code-generation step has not earned its build-time cost here.
 
 ### Unit 3 — The durable record
 
@@ -246,7 +248,18 @@ justifies it. Load pressure never forces a second engineering project instead.
 > Keep this section current as work proceeds. Each box mirrors one unit in *Detailed design*.
 
 - [ ] Unit 1 — The load estimate, revalidated against measurements once traffic exists.
-- [ ] Unit 2 — Go services, Protocol Buffers definitions served over Connect, library baseline.
+- [x] Unit 2 — Go services, Protocol Buffers definitions served over Connect, library baseline.
+      Every service is Go, defined in Protocol Buffers under `proto/citywalk/*/v1/`, generated into
+      `gen/.../v1connect`, and served over Connect (`internal/platform/connectserver/mux.go`). Every
+      library this unit names is genuinely imported and used, not a stray `go.mod` entry: `pgx`
+      (`internal/definition/store` and elsewhere), `go-redis` (`internal/platform/redisclient`),
+      `franz-go` (`internal/platform/eventlog`), `clickhouse-go` (`internal/platform/clickhouse`),
+      `cel-go` (`internal/audience/predicate`, `registry`, `eval`), `roaring`
+      (`internal/membership/reverse`, `forward`, `batch`), `river` (`internal/platform/jobqueue`), and
+      OpenTelemetry (`internal/platform/observability`). One correction against this unit's own text,
+      made in the same change that checks this box: `sqlc` was never adopted — this codebase queries
+      `pgx` directly throughout, and this unit's prose above now says so instead of claiming a
+      library this codebase does not use.
 - [ ] Unit 3 — PostgreSQL schema and the migration-before-code deployment rule.
 - [x] Unit 4 — Redis for the membership index, tag cache, assembly bundles, and counters.
       All four named uses are live: the reverse membership index (`internal/membership/reverse`,
@@ -401,11 +414,22 @@ justifies it. Load pressure never forces a second engineering project instead.
       alongside the `project_budget` suppression event it already records — CW-0007's other suppression
       reasons remain unimplemented, so `project_budget` is the sole reason the counter carries so far;
       and the schema-version-skip count (`internal/delivery/payload/payload.go`,
-      `citywalk.delivery.schema_version_skip_count`) is new as well, incremented where `buildEntry`
-      finds no variant matching the channel's declared schema major.
+      `citywalk.delivery.schema_version_skip_count`) is new as well, incremented where
+      `bundle.go`'s `toBundleMessage` finds no variant matching the channel's declared schema major.
       `internal/platform/observability/observability_test.go` proves the logger emits one parseable
       JSON record per line.
-- [ ] Unit 11 — Phase one as a single process; log and columnar store in phase two.
+- [x] Unit 11 — Phase one as a single process; log and columnar store in phase two.
+      `cmd/server/main.go` matches this unit's own text. By default it runs every service in one
+      process against PostgreSQL and Redis, and it starts each store only once an operator sets its
+      connection string. The event publisher defaults to `EventPublisherPostgres` (`config.go`), so
+      events still go straight to `events_log`. The ClickHouse mirror connects only once an operator
+      sets both `ClickHouseMirrorEnabled` and `ClickHouseDSN`, and
+      `internal/platform/objectstorage.New` is never called by default. This unit's own revised text
+      draws the distinction that makes the
+      box checkable now: staging gates which store carries production traffic, not when the
+      supporting code may exist. The Kafka-compatible log, ClickHouse, and the object storage client
+      all ship inside this same codebase, built and tested (Units 5-7), selected only by
+      configuration that defaults to the phase-one path described here.
 
 ## References
 
