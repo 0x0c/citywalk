@@ -23,8 +23,7 @@ type Limiter struct {
 // channel stayed within Limit. The increment happens whether or not the batch is ultimately allowed,
 // so a device cannot use a rejected retry to spend more than its share of the window.
 func (l Limiter) Allow(ctx context.Context, channelID string, n int64, now time.Time) (bool, error) {
-	windowIndex := now.Unix() / int64(l.Window.Seconds())
-	key := fmt.Sprintf("citywalk:eventrate:%s:%d", channelID, windowIndex)
+	key := l.key(channelID, now)
 
 	count, err := l.Redis.IncrBy(ctx, key, n).Result()
 	if err != nil {
@@ -37,4 +36,14 @@ func (l Limiter) Allow(ctx context.Context, channelID string, n int64, now time.
 		}
 	}
 	return count <= l.Limit, nil
+}
+
+// key is the Redis key holding channelID's counter for the fixed window containing now. Both halves
+// matter: the "citywalk:eventrate:" prefix keeps the counter clear of CW-0005's reverse index and
+// CW-0007's budget counters in the Redis instance CW-0010 Unit 4 shares between them, and the window
+// index is what makes the ceiling per-window rather than per-lifetime — a new window is a new key,
+// so the old one simply expires rather than being reset by anyone.
+func (l Limiter) key(channelID string, now time.Time) string {
+	windowIndex := now.Unix() / int64(l.Window.Seconds())
+	return fmt.Sprintf("citywalk:eventrate:%s:%d", channelID, windowIndex)
 }

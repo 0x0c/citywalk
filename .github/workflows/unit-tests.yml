@@ -1,0 +1,80 @@
+# The unit suite on its own: every test that needs no PostgreSQL and no Redis, run against the two
+# conditions ci.yml's combined `go test ./...` step does not apply — the race detector and randomized
+# test order.
+#
+# This is deliberately not a duplicate of ci.yml. That workflow is the merge gate, and it runs the
+# unit and integration suites back to back inside a job that first has to bring up two service
+# containers, so a broken pure function is reported minutes after the push and behind an unrelated
+# infrastructure failure. This job needs nothing but a Go toolchain, so it answers first, and it
+# answers a question ci.yml does not ask at all: whether the suite passes with `-race` and with
+# `-shuffle=on`, which is what catches a data race in a package-level cache and a test that only
+# passes because a sibling ran before it.
+#
+# ci.yml remains the gate. Nothing here replaces it.
+name: Unit tests
+
+on:
+  push:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - ".github/workflows/unit-tests.yml"
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - ".github/workflows/unit-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: go test (race, shuffled)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # -race and -shuffle=on are the whole point of this job; see the header comment. The seed is
+      # printed by `go test` itself on failure, so a shuffle-order failure is reproducible from the
+      # log with `go test -shuffle=<seed>` rather than being a mystery that passes on re-run.
+      - name: go test (unit)
+        run: make test-unit
+
+      # The per-function coverage table, in the job summary rather than buried in the log, so the
+      # effect of a change on the untested surface is visible without downloading anything. This
+      # reports; it does not gate. A coverage threshold here would fail honest changes — most of the
+      # remaining uncovered code is the database and Redis access the integration suite covers, and
+      # a number that counts those lines as missing would only teach people to ignore it.
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ ! -f coverage.out ]; then
+            echo "No coverage profile produced (the test step failed before writing one)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Unit test coverage"
+            echo
+            echo '```'
+            # gen/ is protobuf codegen: it has no hand-written statements to cover, and leaving it in
+            # buries the packages that do behind a wall of zeroes.
+            go tool cover -func=coverage.out | grep -v '^github.com/0x0c/citywalk/gen/'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: coverage.out
+          if-no-files-found: ignore
