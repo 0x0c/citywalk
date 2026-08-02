@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
@@ -30,6 +31,19 @@ type Config struct {
 	// StaticKeyAuthenticator stand-in for a real identity-provider integration (see
 	// internal/platform/adminauth's package doc comment for why). Empty disables AdminService.
 	AdminKeys map[string]adminauth.Principal
+	// ClickHouseDSN is the connection string for the measurement store CW-0010 Unit 6 names
+	// (internal/platform/clickhouse). Empty leaves the ClickHouse mirroring job disabled regardless of
+	// ClickHouseMirrorEnabled, the same "no DSN, no client" shape PostgresDSN and RedisAddr already
+	// use.
+	ClickHouseDSN string
+	// ClickHouseMirrorEnabled selects between CW-0010 Unit 11's two phases for measurement storage.
+	// false, the default, keeps the phase-one path exactly as it is today: events aggregated into the
+	// Postgres rollups by internal/event/consumer, untouched by this flag. true additionally starts
+	// internal/event/mirror's periodic job, which reads accepted events out of events_log and writes
+	// them into ClickHouse — additive, not a replacement for the rollups devices' delivery depends on.
+	// Flipping this is the operational decision Unit 11 reserves for once event volume justifies the
+	// second phase; citywalk has no real production traffic yet, so it defaults to off.
+	ClickHouseMirrorEnabled bool
 }
 
 // Load reads the configuration from environment variables, applying defaults for anything a phase-one
@@ -39,18 +53,40 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
+	clickHouseMirrorEnabled, err := parseBool("CITYWALK_CLICKHOUSE_MIRROR_ENABLED", os.Getenv("CITYWALK_CLICKHOUSE_MIRROR_ENABLED"))
+	if err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
 
 	cfg := Config{
-		ListenAddr:      getenv("CITYWALK_LISTEN_ADDR", ":8080"),
-		PostgresDSN:     os.Getenv("CITYWALK_POSTGRES_DSN"),
-		RedisAddr:       os.Getenv("CITYWALK_REDIS_ADDR"),
-		TokenSigningKey: []byte(os.Getenv("CITYWALK_TOKEN_SIGNING_KEY")),
-		AdminKeys:       adminKeys,
+		ListenAddr:              getenv("CITYWALK_LISTEN_ADDR", ":8080"),
+		PostgresDSN:             os.Getenv("CITYWALK_POSTGRES_DSN"),
+		RedisAddr:               os.Getenv("CITYWALK_REDIS_ADDR"),
+		TokenSigningKey:         []byte(os.Getenv("CITYWALK_TOKEN_SIGNING_KEY")),
+		AdminKeys:               adminKeys,
+		ClickHouseDSN:           os.Getenv("CITYWALK_CLICKHOUSE_DSN"),
+		ClickHouseMirrorEnabled: clickHouseMirrorEnabled,
 	}
 	if cfg.ListenAddr == "" {
 		return Config{}, fmt.Errorf("config: CITYWALK_LISTEN_ADDR must not be empty")
 	}
 	return cfg, nil
+}
+
+// parseBool reads an optional boolean environment variable, defaulting to false (CW-0010 Unit 11:
+// "It defaults to the first phase's ... path") when raw is empty, so an unset flag is a valid
+// phase-one deployment rather than a misconfiguration — the same "empty is a valid default" shape
+// parseAdminKeys already uses. A non-empty value that strconv.ParseBool cannot read is an error, so a
+// typo in the flag never silently behaves as either "on" or "off".
+func parseBool(name, raw string) (bool, error) {
+	if raw == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean (true/false), got %q", name, raw)
+	}
+	return v, nil
 }
 
 // parseAdminKeys decodes CITYWALK_ADMIN_API_KEYS: a comma-separated list of

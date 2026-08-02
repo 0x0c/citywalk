@@ -243,42 +243,69 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
       ハッシュで鍵付けし、Redis の集合による索引でキャンペーン単位の無効化を行います。ここにあるものは
       すべて、この文書自身が認めているとおり、カウンタを除いて派生値か期限付きです。
 - [ ] ユニット5：Kafka 互換のログと、読み手ごとの位置。
-- [ ] ユニット6：ClickHouse の格納、集計、13か月の保持。
+- [x] ユニット6：ClickHouse の格納、集計、13か月の保持。
+      `internal/platform/clickhouse` は、`clickhouse-go` の接続（`New`）と、本ユニットが求める生イベントの
+      スキーマ（`events_raw`）を組み立てます。`events_raw` は `ReplacingMergeTree(server_time)`
+      エンジンの表であり（`RawEventsDDL`、`EnsureSchema`）、`(message_id, device_time, id)` の順に並べます。
+      これは CW-0009 ユニット4が定める「プロジェクト、メッセージ、時刻」の順序のうち、プロジェクトに
+      当たる概念を本コードベースがまだ持たないため（`internal/definition/model` にその型はありません）、
+      プロジェクトの代わりにメッセージを使ったものです。表は日ごとに分割し、`TTL device_time +
+      INTERVAL 13 MONTH` という句を持たせています。これは、本ユニット自身が定める保持期間を、運用担当者の
+      手作業に委ねるのではなく、スキーマへ直接表現したものです。
+
+      定期実行のジョブ `internal/event/mirror`（`river` の上で動く `MirrorWorker` と
+      `MirrorPeriodicJob`、CW-0010 ユニット8）は、`events_log` から受理済みのイベントを読み取り、5分ごと
+      にバッチで ClickHouse へ書き込みます。読み取りには専用の消費者位置（`MirrorConsumer`。
+      `event_consumer_offsets` の行の1つで、`consumer.TargetingRollupConsumer` の位置とは別立てです）を
+      使います。`internal/platform/config` の `ClickHouseMirrorEnabled` フラグがこの経路全体を制御し、
+      デフォルトは false です。本ユニット自身の段階分けの本文が述べるとおり、citywalk にはまだ実際の
+      本番トラフィックがなく、デフォルトでは ClickHouse を稼働中のレポート格納先にしてはなりません。
+      `cmd/server/main.go` は、このフラグが true で `ClickHouseDSN` が設定されているときにだけ
+      ClickHouse への接続を開き、`MirrorWorker` を登録します。`internal/event/consumer` にある既存の
+      集計書き込みの経路、つまり端末への配信が依存するデフォルトの経路には、本パスは手を加えていません。
+
+      未実装なのは、本ユニット自身の本文が同じく名指ししている集計表です。本パスが作るのは生イベント側
+      だけです。CW-0009 ユニット5がすでに保守している Postgres 側の集計と並べて ClickHouse 側の集計が
+      必要になれば、それは後続の作業です。本パスを組み立てたサンドボックスには、到達可能な ClickHouse
+      インスタンスがありませんでした（ポート 8123 が閉じていることを確認済みです）。
+      `internal/platform/clickhouse` と `internal/event/mirror` の `//go:build integration` 試験群は、
+      本リポジトリの既存の Postgres と Redis の統合試験と同じ形で `CITYWALK_TEST_CLICKHOUSE_DSN` により
+      起動を切り替えるよう書いてあり、コンパイルは通りますが、実サーバに対してはまだ実行していません。
 - [x] ユニット7：配信網の背後に置く、内容から導いた URL を持つオブジェクトストレージ。
       `internal/platform/objectstorage` は、MinIO、Amazon Web Services（AWS）の S3、大半の自前ホスト型
-      S3 互換ストレージに対して動く S3 互換クライアント `github.com/minio/minio-go/v7` を包む。特定の
-      ベンダーへ縛られない選択である。`Hash` は `crypto/sha256` によるハッシュ値であり、
+      S3 互換ストレージに対して動く S3 互換クライアント `github.com/minio/minio-go/v7` を包みます。特定の
+      ベンダーへ縛られない選択です。`Hash` は `crypto/sha256` によるハッシュ値であり、
       `internal/audience/predicate.Compile` が自身のキャッシュの鍵付けにすでに使っている構成をそのまま
-      流用する。`internal/delivery/etag` の非暗号学的な `fnv.New64a` の値ではなくこちらを選ぶのは、この
-      場面が求める性質が違うからであり、理由は該当箇所のドキュメントコメントに記す。`Key` と `AssetURL`
-      はハッシュ値から格納先の鍵と配信網
-      の URL を導く。したがって、同じバイト列の再アップロードは冪等であり（`Client.Upload` は put の前に
-      stat で確かめる）、常に同じ URL に落ち着く。これが、画像の差し替えをキャッシュの無効化ではなく
-      新しい URL にする性質そのものである。ユニット11が改訂した段階分けに沿って、本リポジトリのデフォルトの
-      設定は `New` を一度も呼ばない。起動時にも、それを使わないリクエスト経路にも、格納先が到達可能で
-      あるという前提を置くコードはどこにもない。
+      流用します。`internal/delivery/etag` の非暗号学的な `fnv.New64a` の値ではなくこちらを選ぶのは、この
+      場面が求める性質が違うからであり、理由は該当箇所のドキュメントコメントに記します。`Key` と
+      `AssetURL` はハッシュ値から格納先の鍵と配信網の URL を導きます。したがって、同じバイト列の
+      再アップロードは冪等であり（`Client.Upload` は put の前に stat で確かめます）、常に同じ URL に
+      落ち着きます。これが、画像の差し替えをキャッシュの無効化ではなく新しい URL にする性質そのものです。
+      ユニット11が改訂した段階分けに沿って、本リポジトリのデフォルトの設定は `New` を一度も呼びません。
+      起動時にも、それを使わないリクエスト経路にも、格納先が到達可能であるという前提を置くコードはどこにも
+      ありません。
 
       `internal/definition/validate` は、CW-0003 ユニット5の進捗が本ユニットに阻まれていると名指し
-      していたメディアの参照整合性の欠落を閉じる。`Presentation.Media` が設定されている場合、その値は
-      `objectstorage.IsContentAddressedURL` を満たさなければならない。同じ項目のもう1つの欠落である
+      していたメディアの参照整合性の欠落を閉じます。`Presentation.Media` が設定されている場合、その値は
+      `objectstorage.IsContentAddressedURL` を満たさなければなりません。同じ項目のもう1つの欠落である
       コンバージョンイベントの参照整合性は、オブジェクトストレージとは無関係に、カタログの担当が
-      定まっていないことに阻まれたままである。メディアの参照整合性の検証は、格納先への往復を伴わない、
-      形だけの確認である。唯一の選択ではない
+      定まっていないことに阻まれたままです。メディアの参照整合性の検証は、格納先への往復を伴わない、
+      形だけの確認です。唯一の選択ではなく
       （`objectstorage.Client.Exists` は、その往復を引き受けられる呼び出し元のために存在確認を伴う
-      検証を提供する）という判断であり、理由は `validate` パッケージ自身のドキュメントコメントに
-      記す。メッセージを保存するたびに存在確認を行えば、これまで PostgreSQL だけに依存していた定義の
-      保存が、オブジェクトストレージへの到達可能性という新たな依存を持つことになる。それは、ユニット11
-      が定める設定切り替えによる段階的な導入がまさに禁じている前提である。
+      検証を提供します）という判断であり、理由は `validate` パッケージ自身のドキュメントコメントに
+      記します。メッセージを保存するたびに存在確認を行えば、これまで PostgreSQL だけに依存していた定義の
+      保存が、オブジェクトストレージへの到達可能性という新たな依存を持つことになります。それは、ユニット11
+      が定める設定切り替えによる段階的な導入がまさに禁じている前提です。
 
-      格納先を立てずに試験できる範囲はすべて試験済みである。内容アドレス化（`Hash`、`Key`、
+      格納先を立てずに試験できる範囲はすべて試験済みです。内容アドレス化（`Hash`、`Key`、
       `AssetURL`）、ホストやパスの接頭辞に依存しない URL の形の識別とスキーム・文字種の拒否、そして
       `validate` パッケージへの組み込み（`internal/platform/objectstorage/objectstorage_test.go`、
-      `internal/definition/validate/validate_test.go`）である。`//go:build integration` の試験一式
+      `internal/definition/validate/validate_test.go`）です。`//go:build integration` の試験一式
       （`internal/platform/objectstorage/objectstorage_integration_test.go`）は、存在しないバケットに
-      対する `New`、`Upload` の冪等性と内容アドレス化、`Exists` を一貫して確かめる。本リポジトリの
+      対する `New`、`Upload` の冪等性と内容アドレス化、`Exists` を一貫して確かめます。本リポジトリの
       Postgres・Redis の結合試験と同じ形で `CITYWALK_TEST_S3_ENDPOINT` などの環境変数によって有効化
-      する仕組みであり、実機では動かしていない。本パスを実装したサンドボックスには到達可能なオブジェクト
-      ストレージのエンドポイントがなかった（MinIO の既定ポート 9000/9001 とも閉じている）。
+      する仕組みであり、実機では動かしていません。本パスを実装したサンドボックスには到達可能なオブジェクト
+      ストレージのエンドポイントがありませんでした（MinIO の既定ポート 9000/9001 とも閉じています）。
 - [x] ユニット8：PostgreSQL を土台とするジョブキューと、15分刻みのタイムゾーン区画。
       `internal/platform/jobqueue` が、既存の `pgx/v5` プール（`internal/platform/postgres`）に対して
       `river` のクライアントを組み立て、起動する。`cmd/server/main.go` は、他のあらゆる基盤側の依存が

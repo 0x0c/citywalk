@@ -19,9 +19,11 @@ import (
 
 	"github.com/0x0c/citywalk/internal/audience/registry"
 	"github.com/0x0c/citywalk/internal/event/consumer"
+	"github.com/0x0c/citywalk/internal/event/mirror"
 	"github.com/0x0c/citywalk/internal/governance/budget"
 	"github.com/0x0c/citywalk/internal/membership/batch"
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
+	"github.com/0x0c/citywalk/internal/platform/clickhouse"
 	"github.com/0x0c/citywalk/internal/platform/config"
 	"github.com/0x0c/citywalk/internal/platform/connectserver"
 	"github.com/0x0c/citywalk/internal/platform/jobqueue"
@@ -93,10 +95,11 @@ func run(logger *slog.Logger) error {
 	}
 
 	if pool != nil {
-		// CW-0010 Unit 8: the job queue backs three periodic jobs. CW-0005 Unit 6's membership
-		// reconciliation and CW-0010 Unit 8's own activation-slot proof only need pool; CW-0009 Unit
-		// 1's rollup recompute additionally records impressions against the project budget when Redis
-		// is configured, mirroring how connectserver's EventServer treats Redis as optional.
+		// CW-0010 Unit 8: the job queue backs the platform's periodic jobs. CW-0005 Unit 6's
+		// membership reconciliation and CW-0010 Unit 8's own activation-slot proof only need pool;
+		// CW-0009 Unit 1's rollup recompute additionally records impressions against the project
+		// budget when Redis is configured, mirroring how connectserver's EventServer treats Redis as
+		// optional.
 		//
 		// registry.New() with no definitions is a placeholder: CW-0004's attribute registry has no
 		// production construction path yet (no attribute definition is sourced from anywhere outside
@@ -122,6 +125,32 @@ func run(logger *slog.Logger) error {
 			batch.ReconcilePeriodicJob(),
 			consumer.RollupRecomputePeriodicJob(),
 			jobqueue.ActivationSlotPeriodicJob(),
+		}
+
+		// CW-0010 Unit 11: the ClickHouse mirroring job is the second phase's measurement path,
+		// config-gated and off by default. Nothing here runs, and no ClickHouse connection is even
+		// opened, unless an operator sets both the flag and the DSN — see internal/platform/config's
+		// ClickHouseMirrorEnabled doc comment for why this stays additive to, not a replacement for,
+		// the rollup path just registered above.
+		if cfg.ClickHouseMirrorEnabled {
+			if cfg.ClickHouseDSN != "" {
+				chConn, err := clickhouse.New(ctx, cfg.ClickHouseDSN)
+				if err != nil {
+					return fmt.Errorf("connect to clickhouse: %w", err)
+				}
+				defer func() {
+					if err := chConn.Close(); err != nil {
+						logger.Error("clickhouse close failed", slog.Any("error", err))
+					}
+				}()
+				logger.Info("clickhouse ready")
+
+				chClient := &clickhouse.Client{Conn: chConn}
+				river.AddWorker(workers, &mirror.MirrorWorker{Pool: pool, Client: chClient})
+				periodicJobs = append(periodicJobs, mirror.MirrorPeriodicJob())
+			} else {
+				logger.Warn("CITYWALK_CLICKHOUSE_MIRROR_ENABLED is true but CITYWALK_CLICKHOUSE_DSN is not set, running without the ClickHouse mirror (CW-0010 Unit 6)")
+			}
 		}
 
 		jobClient, err := jobqueue.New(pool, workers, periodicJobs, logger)

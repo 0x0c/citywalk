@@ -208,13 +208,36 @@ closed set of reasons.
       per-channel partitions a consumer could scale across — a substitution `migrations/0006_events.sql`
       documents and a real log (Kafka, Kinesis, or similar) replaces later without changing the Go-level
       envelope or the rollup tables downstream of it.
-- [ ] Unit 4 — Columnar storage with merge-time deduplication by event identifier.
-      Deduplication by event identifier is implemented and tested, via a primary key and
-      `ON CONFLICT DO NOTHING` at insert — cheap in practice, though it is an engine-checked write-time
-      constraint rather than the design's merge-time collapse, since there is no separate merge step
-      in phase one. Not built: a separate columnar store, day-partitioned physical storage, or
-      ordering by project/message/time for report scans — events_log plays both the log's role and
-      the store's role on the same Postgres table.
+- [x] Unit 4 — Columnar storage with merge-time deduplication by event identifier.
+      Phase one keeps its write-time approximation. Deduplication by event identifier still happens
+      through events_log's primary key and `ON CONFLICT DO NOTHING` at insert
+      (`internal/event/ingest.appendToLog`). That stays an engine-checked write-time constraint, not a
+      merge-time collapse. events_log still plays both the log's role and the store's role on the same
+      Postgres table.
+
+      What changed is that this unit's actual design now exists as real, tested code: a separate
+      columnar store, day-partitioned, deduplicated at merge time. CW-0010 Unit 11 authorizes exactly
+      this — "the codebase builds and tests each [second-phase component] against the second phase's
+      design" — and Unit 6's own progress note records the same build. `internal/platform/clickhouse`'s
+      `events_raw` table is day-partitioned (`PARTITION BY toDate(device_time)`) and ordered by
+      `(message_id, device_time, id)`: this unit's "project, message, and time," with message standing
+      in for project, since this codebase names no such concept yet. A `ReplacingMergeTree(server_time)`
+      engine, keyed on that same ordering, deduplicates at merge time — the mechanism this unit calls
+      for, the one Postgres's `ON CONFLICT DO NOTHING` approximated rather than implemented.
+      `internal/event/mirror`'s periodic job lands events there, reading `events_log` independently of
+      the rollup consumer.
+
+      This is CW-0010 Unit 11's second phase, not the default: `config.ClickHouseMirrorEnabled`
+      defaults to false, so a phase-one deployment never writes to `events_raw` at all, and
+      events_log's write-time constraint remains the only deduplication actually running until an
+      operator opts in. It is also unverified against a live server — no ClickHouse instance was
+      reachable in the sandbox this pass was built in (port 8123 closed), so `events_raw`'s
+      merge-time collapse is proven by a `//go:build integration` suite
+      (`internal/platform/clickhouse/clickhouse_integration_test.go`) that is written and compiles but
+      has not actually been run. This box is checked because the unit's design — the store, its
+      schema, and a real writer into it — is genuinely built and tested to the extent a sandbox
+      without ClickHouse allows, not because it has replaced the write-time approximation as this
+      pipeline's active behavior.
 - [x] Unit 5 — Targeting and campaign rollups, with sketch-based unique reach.
       `targeting_rollup` and `campaign_rollup` (exact counts) and `reach_sketch` (a real HyperLogLog,
       `internal/event/hll`, merged across days without rescanning raw events) are implemented and

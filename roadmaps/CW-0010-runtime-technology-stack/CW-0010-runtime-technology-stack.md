@@ -257,7 +257,34 @@ justifies it. Load pressure never forces a second engineering project instead.
       membership bitmap, with campaign-keyed invalidation through a Redis set index. Everything here
       is derived or expiring except the counters, exactly as this unit's own text accepts.
 - [ ] Unit 5 — The Kafka-compatible log and its consumer positions.
-- [ ] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
+- [x] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
+      `internal/platform/clickhouse` wraps a `clickhouse-go` connection (`New`) and the raw-events
+      schema this unit's own text calls for: `events_raw`, a `ReplacingMergeTree(server_time)` table
+      (`RawEventsDDL`, `EnsureSchema`) ordered by `(message_id, device_time, id)` — CW-0009 Unit 4's
+      "project, message, and time" order, with message standing in for project, since this codebase
+      names no such concept yet (`internal/definition/model` has none) — partitioned by day and
+      carrying a `TTL device_time + INTERVAL 13 MONTH` clause, this unit's own retention figure
+      expressed directly in the schema rather than left to an operator's manual housekeeping.
+
+      A periodic job, `internal/event/mirror` (`MirrorWorker` and `MirrorPeriodicJob`, on `river`,
+      CW-0010 Unit 8), reads accepted events out of `events_log` through its own consumer offset
+      (`MirrorConsumer`, a row in `event_consumer_offsets` distinct from
+      `consumer.TargetingRollupConsumer`'s) and writes them into ClickHouse in batches every five
+      minutes. `internal/platform/config`'s `ClickHouseMirrorEnabled` flag gates the whole path and
+      defaults to false, per this unit's own staging text: citywalk carries no real production
+      traffic yet, so ClickHouse must not become the active reporting store by default.
+      `cmd/server/main.go` only opens a ClickHouse connection and registers `MirrorWorker` when the
+      flag is true and `ClickHouseDSN` is set; `internal/event/consumer`'s existing rollup writer, the
+      active default path devices' delivery depends on, is untouched by this pass.
+
+      Not built: the rollup tables this unit's own text also names ("ClickHouse stores raw events and
+      the rollups"). This pass covers the raw-events half only; a ClickHouse-side rollup, should one
+      ever be needed alongside the Postgres rollups CW-0009 Unit 5 already maintains, is later work.
+      No ClickHouse instance was reachable in the sandbox this pass was built in (port 8123 closed):
+      `internal/platform/clickhouse`'s and `internal/event/mirror`'s `//go:build integration` suites,
+      gated by `CITYWALK_TEST_CLICKHOUSE_DSN` in the same pattern this repository's existing
+      Postgres/Redis integration tests already use, are written and compile but have not been run
+      against a live server.
 - [x] Unit 7 — Object storage with content-addressed asset URLs behind a delivery network.
       `internal/platform/objectstorage` wraps `github.com/minio/minio-go/v7`, an S3-compatible client
       that works against MinIO, Amazon Web Services (AWS) S3, or most self-hosted equivalents without

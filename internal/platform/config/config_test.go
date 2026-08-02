@@ -12,6 +12,7 @@ func TestLoadDefaultsListenAddr(t *testing.T) {
 	for _, key := range []string{
 		"CITYWALK_LISTEN_ADDR", "CITYWALK_POSTGRES_DSN", "CITYWALK_REDIS_ADDR",
 		"CITYWALK_TOKEN_SIGNING_KEY", "CITYWALK_ADMIN_API_KEYS",
+		"CITYWALK_CLICKHOUSE_DSN", "CITYWALK_CLICKHOUSE_MIRROR_ENABLED",
 	} {
 		v, ok := os.LookupEnv(key)
 		if !ok {
@@ -46,6 +47,14 @@ func TestLoadDefaultsListenAddr(t *testing.T) {
 	if len(cfg.AdminKeys) != 0 {
 		t.Errorf("AdminKeys = %v, want empty", cfg.AdminKeys)
 	}
+	if cfg.ClickHouseDSN != "" {
+		t.Errorf("ClickHouseDSN = %q, want empty", cfg.ClickHouseDSN)
+	}
+	// CW-0010 Unit 11: the flag defaults to the phase-one path, so an unset environment must leave
+	// ClickHouse mirroring disabled.
+	if cfg.ClickHouseMirrorEnabled {
+		t.Error("ClickHouseMirrorEnabled = true, want false when CITYWALK_CLICKHOUSE_MIRROR_ENABLED is unset")
+	}
 }
 
 func TestLoadReadsOverrides(t *testing.T) {
@@ -54,6 +63,8 @@ func TestLoadReadsOverrides(t *testing.T) {
 	t.Setenv("CITYWALK_REDIS_ADDR", "localhost:6379")
 	t.Setenv("CITYWALK_TOKEN_SIGNING_KEY", "s3cr3t")
 	t.Setenv("CITYWALK_ADMIN_API_KEYS", "abc123:alice:editor,def456:bob:viewer")
+	t.Setenv("CITYWALK_CLICKHOUSE_DSN", "clickhouse://example/db")
+	t.Setenv("CITYWALK_CLICKHOUSE_MIRROR_ENABLED", "true")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -82,6 +93,20 @@ func TestLoadReadsOverrides(t *testing.T) {
 		if got := cfg.AdminKeys[key]; got != principal {
 			t.Errorf("AdminKeys[%q] = %+v, want %+v", key, got, principal)
 		}
+	}
+	if cfg.ClickHouseDSN != "clickhouse://example/db" {
+		t.Errorf("ClickHouseDSN = %q, want %q", cfg.ClickHouseDSN, "clickhouse://example/db")
+	}
+	if !cfg.ClickHouseMirrorEnabled {
+		t.Error("ClickHouseMirrorEnabled = false, want true")
+	}
+}
+
+func TestLoadRejectsAnUnparsableClickHouseMirrorEnabledValue(t *testing.T) {
+	t.Setenv("CITYWALK_CLICKHOUSE_MIRROR_ENABLED", "not-a-bool")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("Load: got nil error, want one for an unparsable CITYWALK_CLICKHOUSE_MIRROR_ENABLED")
 	}
 }
 
