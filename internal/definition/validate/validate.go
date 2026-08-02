@@ -2,13 +2,26 @@
 // a malformed Message rather than warning about it, because a rejection at save reaches the person
 // who can fix it while a rejection at delivery reaches a device and nobody at all.
 //
-// Referential integrity now covers the one reference with a queryable store behind it: a non-empty
-// AudienceRef must name a real row in segments (CW-0004/CW-0005's audience service). The conversion
-// event catalog and media existence are still not checked — the conversion event catalog has no
-// owner yet, and media existence depends on the object storage CW-0010 Unit 7 defers to a later
-// phase, so neither exists as a queryable store yet. Validate otherwise covers everything this pass
-// can check on its own: structural shape (enforced by model's typed decode), temporal sanity,
-// variant weights, and content security.
+// Referential integrity covers two of the three references CW-0003 Unit 5 names: a non-empty
+// AudienceRef must name a real row in segments (CW-0004/CW-0005's audience service), and a non-nil
+// Presentation.Media must be a content-addressed reference CW-0010 Unit 7's object storage package
+// recognizes the shape of. The conversion event catalog is still not checked — it has no owner yet,
+// so it exists as no queryable store at all, unlike media, whose store now exists (CW-0010 Unit 7)
+// even though nothing in this codebase's default configuration talks to a live one. Validate
+// otherwise covers everything this pass can check on its own: structural shape (enforced by model's
+// typed decode), temporal sanity, variant weights, and content security.
+//
+// Media referential integrity is checked as shape only, never as store existence, and that is a
+// deliberate choice rather than the cheaper option taken by default. Existence would need a reachable
+// object storage endpoint on every message save — turning a definition save, which today depends on
+// nothing but Postgres, into a request that fails whenever an object store is unreachable, even for a
+// deployment that has not turned phase two on (CW-0010 Unit 11's config-gated staging: the store's
+// reachability is exactly the thing that must not be assumed on a request path that doesn't already
+// use it). Shape checking still catches the actual failure mode this gap names — an arbitrary string
+// masquerading as a media reference — without adding that dependency; it does not catch a reference
+// that is well-formed but names an object nobody ever uploaded, which is a real gap this pass accepts.
+// objectstorage.Client.Exists provides the stronger check for a caller willing to pay for it outside
+// the save path (see that method's own doc comment).
 package validate
 
 import (
@@ -21,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/0x0c/citywalk/internal/definition/model"
+	"github.com/0x0c/citywalk/internal/platform/objectstorage"
 )
 
 // allowedLinkSchemes is the allowlist CW-0003 Unit 5 requires for OpenLinkAction.URL. HTTPS only: a
@@ -56,6 +70,9 @@ func Validate(ctx context.Context, pool *pgxpool.Pool, msg model.Message, now ti
 			errs = append(errs, err)
 		}
 		if err := validateContentSecurity(v); err != nil {
+			errs = append(errs, err)
+		}
+		if err := validateMediaRef(v); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -165,6 +182,41 @@ func validateContentSecurity(v model.Variant) error {
 		}
 	})
 	return errors.Join(errs...)
+}
+
+// validateMediaRef rejects a Presentation.Media whose URL is not a content-addressed reference
+// objectstorage recognizes the shape of — CW-0003 Unit 5's media referential-integrity check. See
+// this package's doc comment for why that stops at shape and does not confirm the object exists.
+func validateMediaRef(v model.Variant) error {
+	var errs []error
+	walkContent(v.Content, func(c model.Content) {
+		media := mediaOf(c)
+		if media == nil {
+			return
+		}
+		if !objectstorage.IsContentAddressedURL(media.URL) {
+			errs = append(errs, fmt.Errorf(
+				"variant %s media reference %q is not a content-addressed object storage URL", v.ID, media.URL,
+			))
+		}
+	})
+	return errors.Join(errs...)
+}
+
+// mediaOf returns the Media reference a presented Content member carries, or nil for a member with no
+// Presentation (HTMLContent, SequenceContent — the latter's steps are walked separately) or one whose
+// Media field is unset.
+func mediaOf(c model.Content) *model.MediaRef {
+	switch content := c.(type) {
+	case model.DialogContent:
+		return content.Media
+	case model.BannerContent:
+		return content.Media
+	case model.FullScreenContent:
+		return content.Media
+	default:
+		return nil
+	}
 }
 
 // walkContent calls visit for c and, if c is a SequenceContent, for each of its steps.

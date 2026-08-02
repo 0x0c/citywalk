@@ -258,7 +258,41 @@ justifies it. Load pressure never forces a second engineering project instead.
       is derived or expiring except the counters, exactly as this unit's own text accepts.
 - [ ] Unit 5 — The Kafka-compatible log and its consumer positions.
 - [ ] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
-- [ ] Unit 7 — Object storage with content-addressed asset URLs behind a delivery network.
+- [x] Unit 7 — Object storage with content-addressed asset URLs behind a delivery network.
+      `internal/platform/objectstorage` wraps `github.com/minio/minio-go/v7`, an S3-compatible client
+      that works against MinIO, Amazon Web Services (AWS) S3, or most self-hosted equivalents without
+      pinning this repository to one vendor. `Hash` takes a `crypto/sha256` digest, the same
+      construction `internal/audience/predicate.Compile` already uses to key its own cache, reused
+      rather than reinvented. That is a different hash from `internal/delivery/etag`'s own
+      `fnv.New64a` digest, which is non-cryptographic by design (see that package's own doc comment);
+      `Hash`'s doc comment states why that hash is the wrong tool for content addressing. `Key` and
+      `AssetURL` derive the object key and the delivery-network URL from it, so re-uploading identical
+      bytes is idempotent (`Client.Upload` stats before it puts) and always resolves to the same URL,
+      which is the property that makes an edited image a new URL rather than a cache invalidation. Per
+      Unit 11's revised staging, `New` is never called by this codebase's default configuration —
+      nothing here assumes a live bucket is reachable at startup or on a request path that doesn't
+      already use one.
+
+      `internal/definition/validate` closes CW-0003 Unit 5's media referential-integrity gap, the one
+      its Progress notes named as blocked on this unit: a `Presentation.Media` field, if set, must now
+      satisfy `objectstorage.IsContentAddressedURL`, a pure shape check with no store round trip. (That
+      item's other open gap, conversion event referential integrity, is blocked on the conversion event
+      catalog having no owner — unrelated to object storage, and still open.) Shape checking rather than
+      an existence check is a deliberate choice, not the only one available —
+      `objectstorage.Client.Exists` gives a real existence check for a caller willing to pay for the
+      round trip — and `validate`'s own package doc comment states the reasoning: an existence check on
+      every message save would make Postgres-only definition saves newly depend on object storage
+      reachability, which is exactly the assumption Unit 11's config-gated staging forbids.
+
+      Tested without a live bucket: content addressing (`Hash`, `Key`, `AssetURL`), URL shape
+      recognition including host- and path-prefix independence and scheme/charset rejection, and the
+      validate-package wiring (`internal/platform/objectstorage/objectstorage_test.go`,
+      `internal/definition/validate/validate_test.go`). A `//go:build integration` suite
+      (`internal/platform/objectstorage/objectstorage_integration_test.go`) covers `New` against a
+      missing bucket, `Upload`'s idempotency and content-addressing end to end, and `Exists`; it is
+      gated on `CITYWALK_TEST_S3_ENDPOINT` and friends, matching this repository's Postgres and Redis
+      integration tests, and was not run live — no object storage endpoint was reachable in the sandbox
+      this pass was implemented in (MinIO's default ports 9000/9001 both closed).
 - [x] Unit 8 — The PostgreSQL-backed job queue and 15-minute time-zone slots.
       `internal/platform/jobqueue` builds and starts a `river` client against the existing `pgx/v5`
       pool (`internal/platform/postgres`). `cmd/server/main.go` starts and stops that client

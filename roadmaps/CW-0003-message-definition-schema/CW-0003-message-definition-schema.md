@@ -167,10 +167,14 @@ the person who can fix it, while a rejection at delivery reaches a device and no
       validation admits.
 - [ ] Unit 5 — Save-time validation covering shape, references, time, weights, and content security.
       Shape, temporal sanity, weights, content security, and audience referential integrity (a
-      non-empty `audience_ref` must name a real row in `segments`) are implemented and tested.
-      Conversion event and media referential integrity are not — the conversion event catalog has no
-      owner yet, and media existence depends on the object storage CW-0010 Unit 7 defers to a later
-      phase, so neither exists as a queryable store yet.
+      non-empty `audience_ref` must name a real row in `segments`) are implemented and tested. This
+      pass adds and tests media referential integrity too, now that CW-0010 Unit 7 exists:
+      `internal/definition/validate.validateMediaRef` rejects a `Presentation.Media` whose `URL` is not
+      a reference `objectstorage.IsContentAddressedURL` recognizes the shape of. That check covers
+      shape, not object existence — `validate`'s own package doc comment states why an existence check
+      does not belong on a save path that must not assume an object store is reachable (CW-0010 Unit
+      11's config-gated staging). Conversion event referential integrity is the one gap still open: the
+      conversion event catalog still has no owner, so it exists as no queryable store to check against.
 
 ## References
 

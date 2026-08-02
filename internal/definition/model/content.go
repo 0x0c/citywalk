@@ -24,7 +24,9 @@ type Content interface {
 }
 
 // MediaRef points at a content-addressed asset (CW-0010 Unit 7); the definition service stores the
-// reference, never the asset bytes.
+// reference, never the asset bytes. internal/definition/validate rejects a URL that does not have the
+// shape internal/platform/objectstorage's Upload produces (CW-0003 Unit 5's media referential
+// integrity).
 type MediaRef struct {
 	URL string `json:"url"`
 }

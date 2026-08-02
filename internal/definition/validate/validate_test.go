@@ -8,6 +8,7 @@ import (
 
 	"github.com/0x0c/citywalk/internal/definition/model"
 	"github.com/0x0c/citywalk/internal/definition/validate"
+	"github.com/0x0c/citywalk/internal/platform/objectstorage"
 )
 
 func validMessage(now time.Time) model.Message {
@@ -219,6 +220,68 @@ func TestValidateRejectsExecutableSchemeInHTMLContent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "forbidden scheme") {
 		t.Errorf("Validate error = %q, want it to mention the forbidden scheme", err)
+	}
+}
+
+func TestValidateAcceptsAContentAddressedMediaReference(t *testing.T) {
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	msg := validMessage(now)
+	hash := objectstorage.Hash([]byte("campaign banner image bytes"))
+	url := objectstorage.AssetURL("https://cdn.citywalk.example", objectstorage.Key(hash))
+	msg.Variants[0].Content = model.DialogContent{
+		Presentation: model.Presentation{
+			Heading: "Nice walk",
+			Media:   &model.MediaRef{URL: url},
+		},
+	}
+
+	if err := validate.Validate(context.Background(), nil, msg, now); err != nil {
+		t.Errorf("Validate: %v, want nil for a content-addressed media reference", err)
+	}
+}
+
+func TestValidateRejectsAnArbitraryStringAsAMediaReference(t *testing.T) {
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	msg := validMessage(now)
+	msg.Variants[0].Content = model.DialogContent{
+		Presentation: model.Presentation{
+			Heading: "Nice walk",
+			Media:   &model.MediaRef{URL: "https://example.com/whatever-the-campaign-author-typed.png"},
+		},
+	}
+
+	err := validate.Validate(context.Background(), nil, msg, now)
+	if err == nil {
+		t.Fatal("Validate: got nil error, want a media referential-integrity error")
+	}
+	if !strings.Contains(err.Error(), "not a content-addressed object storage URL") {
+		t.Errorf("Validate error = %q, want it to mention the media reference is not content-addressed", err)
+	}
+}
+
+func TestValidateRejectsAMediaReferenceInsideASequenceStep(t *testing.T) {
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	msg := validMessage(now)
+	msg.Variants[0].Content = model.SequenceContent{
+		Steps: []model.Content{
+			model.FullScreenContent{
+				Presentation: model.Presentation{
+					Media: &model.MediaRef{URL: "not-a-url"},
+				},
+			},
+		},
+	}
+
+	err := validate.Validate(context.Background(), nil, msg, now)
+	if err == nil {
+		t.Fatal("Validate: got nil error, want a media referential-integrity error from the sequence step")
+	}
+}
+
+func TestValidateAcceptsAVariantWithNoMediaReference(t *testing.T) {
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	if err := validate.Validate(context.Background(), nil, validMessage(now), now); err != nil {
+		t.Fatalf("Validate: %v, want nil for a variant with no Media field set", err)
 	}
 }
 

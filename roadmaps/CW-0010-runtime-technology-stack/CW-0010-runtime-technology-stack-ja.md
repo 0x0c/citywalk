@@ -244,7 +244,41 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
       すべて、この文書自身が認めているとおり、カウンタを除いて派生値か期限付きです。
 - [ ] ユニット5：Kafka 互換のログと、読み手ごとの位置。
 - [ ] ユニット6：ClickHouse の格納、集計、13か月の保持。
-- [ ] ユニット7：配信網の背後に置く、内容から導いた URL を持つオブジェクトストレージ。
+- [x] ユニット7：配信網の背後に置く、内容から導いた URL を持つオブジェクトストレージ。
+      `internal/platform/objectstorage` は、MinIO、Amazon Web Services（AWS）の S3、大半の自前ホスト型
+      S3 互換ストレージに対して動く S3 互換クライアント `github.com/minio/minio-go/v7` を包む。特定の
+      ベンダーへ縛られない選択である。`Hash` は `crypto/sha256` によるハッシュ値であり、
+      `internal/audience/predicate.Compile` が自身のキャッシュの鍵付けにすでに使っている構成をそのまま
+      流用する。`internal/delivery/etag` の非暗号学的な `fnv.New64a` の値ではなくこちらを選ぶのは、この
+      場面が求める性質が違うからであり、理由は該当箇所のドキュメントコメントに記す。`Key` と `AssetURL`
+      はハッシュ値から格納先の鍵と配信網
+      の URL を導く。したがって、同じバイト列の再アップロードは冪等であり（`Client.Upload` は put の前に
+      stat で確かめる）、常に同じ URL に落ち着く。これが、画像の差し替えをキャッシュの無効化ではなく
+      新しい URL にする性質そのものである。ユニット11が改訂した段階分けに沿って、本リポジトリのデフォルトの
+      設定は `New` を一度も呼ばない。起動時にも、それを使わないリクエスト経路にも、格納先が到達可能で
+      あるという前提を置くコードはどこにもない。
+
+      `internal/definition/validate` は、CW-0003 ユニット5の進捗が本ユニットに阻まれていると名指し
+      していたメディアの参照整合性の欠落を閉じる。`Presentation.Media` が設定されている場合、その値は
+      `objectstorage.IsContentAddressedURL` を満たさなければならない。同じ項目のもう1つの欠落である
+      コンバージョンイベントの参照整合性は、オブジェクトストレージとは無関係に、カタログの担当が
+      定まっていないことに阻まれたままである。メディアの参照整合性の検証は、格納先への往復を伴わない、
+      形だけの確認である。唯一の選択ではない
+      （`objectstorage.Client.Exists` は、その往復を引き受けられる呼び出し元のために存在確認を伴う
+      検証を提供する）という判断であり、理由は `validate` パッケージ自身のドキュメントコメントに
+      記す。メッセージを保存するたびに存在確認を行えば、これまで PostgreSQL だけに依存していた定義の
+      保存が、オブジェクトストレージへの到達可能性という新たな依存を持つことになる。それは、ユニット11
+      が定める設定切り替えによる段階的な導入がまさに禁じている前提である。
+
+      格納先を立てずに試験できる範囲はすべて試験済みである。内容アドレス化（`Hash`、`Key`、
+      `AssetURL`）、ホストやパスの接頭辞に依存しない URL の形の識別とスキーム・文字種の拒否、そして
+      `validate` パッケージへの組み込み（`internal/platform/objectstorage/objectstorage_test.go`、
+      `internal/definition/validate/validate_test.go`）である。`//go:build integration` の試験一式
+      （`internal/platform/objectstorage/objectstorage_integration_test.go`）は、存在しないバケットに
+      対する `New`、`Upload` の冪等性と内容アドレス化、`Exists` を一貫して確かめる。本リポジトリの
+      Postgres・Redis の結合試験と同じ形で `CITYWALK_TEST_S3_ENDPOINT` などの環境変数によって有効化
+      する仕組みであり、実機では動かしていない。本パスを実装したサンドボックスには到達可能なオブジェクト
+      ストレージのエンドポイントがなかった（MinIO の既定ポート 9000/9001 とも閉じている）。
 - [x] ユニット8：PostgreSQL を土台とするジョブキューと、15分刻みのタイムゾーン区画。
       `internal/platform/jobqueue` が、既存の `pgx/v5` プール（`internal/platform/postgres`）に対して
       `river` のクライアントを組み立て、起動する。`cmd/server/main.go` は、他のあらゆる基盤側の依存が
