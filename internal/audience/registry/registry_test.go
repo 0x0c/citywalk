@@ -59,3 +59,50 @@ func TestNewRejectsAnEmptyName(t *testing.T) {
 		t.Error("New() = nil for an empty attribute name, want an error")
 	}
 }
+
+// TestGranularityCarriesAcceptsTodaysOnlyGranularity proves CW-0004 Unit 5's type-checker rule is a
+// no-op against the registry as it exists today, where "day" is the only granularity a Definition can
+// carry and every window is a whole number of days: a day-level request against a day-level rollup
+// always carries.
+func TestGranularityCarriesAcceptsTodaysOnlyGranularity(t *testing.T) {
+	carries, err := registry.GranularityCarries(registry.AggregateGranularityDay, registry.AggregateGranularityDay)
+	if err != nil {
+		t.Fatalf("GranularityCarries: %v, want nil", err)
+	}
+	if !carries {
+		t.Error("GranularityCarries(day, day) = false, want true")
+	}
+}
+
+// TestGranularityCarriesRejectsAFinerRequestThanADayLevelRollup exercises the general comparison
+// directly with the roadmap's own example: an hour-level request against a rollup that only carries
+// day-level buckets cannot be answered, even though no Definition registered today can produce this
+// request — this is what makes the rule already correct once a second, finer granularity exists for a
+// predicate to ask for by mistake.
+func TestGranularityCarriesRejectsAFinerRequestThanADayLevelRollup(t *testing.T) {
+	carries, err := registry.GranularityCarries(registry.AggregateGranularityDay, "hour")
+	if err != nil {
+		t.Fatalf("GranularityCarries: %v, want nil", err)
+	}
+	if carries {
+		t.Error("GranularityCarries(day, hour) = true, want false: a day-level rollup cannot answer an hour-level request")
+	}
+}
+
+// TestGranularityCarriesAcceptsACoarserRequestThanAFinerRollup is the mirror case: an hour-level
+// rollup carries more than enough precision to answer a day-level request.
+func TestGranularityCarriesAcceptsACoarserRequestThanAFinerRollup(t *testing.T) {
+	carries, err := registry.GranularityCarries("hour", registry.AggregateGranularityDay)
+	if err != nil {
+		t.Fatalf("GranularityCarries: %v, want nil", err)
+	}
+	if !carries {
+		t.Error("GranularityCarries(hour, day) = false, want true: an hour-level rollup answers a day-level request")
+	}
+}
+
+func TestGranularityCarriesRejectsAnUnknownGranularity(t *testing.T) {
+	if _, err := registry.GranularityCarries("fortnight", registry.AggregateGranularityDay); err == nil {
+		t.Error("GranularityCarries(\"fortnight\", day) = nil error, want an error for an unrecognized granularity")
+	}
+}

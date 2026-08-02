@@ -263,9 +263,9 @@ func (c *compiler) compileIdentScalar(name string) (string, error) {
 //
 // AggregateGranularity is always "day" today (the only granularity CW-0009's rollup carries), and
 // AggregateWindowDays is always a whole number of days, so there is no predicate-level way to ask
-// for finer precision than the rollup stores — the type-checker rejection CW-0004 Unit 5 describes
-// only gets something to reject once a second, finer granularity exists to be confused with this
-// one.
+// for finer precision than the rollup stores — predicate.validateAggregateGranularity (CW-0004 Unit
+// 5's type-checker rejection) only gets something to reject once a second, finer granularity exists
+// to be confused with this one, and this code never sees a Definition that check would have rejected.
 func (c *compiler) compileEventAggregate(def registry.Definition) (string, error) {
 	// pgx binds a Go int as bigint by default, and Postgres has no date - bigint operator (only
 	// date - integer), so the window-days placeholder needs an explicit cast.
