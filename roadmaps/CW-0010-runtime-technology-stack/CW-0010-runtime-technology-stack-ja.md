@@ -240,7 +240,28 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
       クライアント ID）が要るが、本リポジトリはそれらを持たない。`StaticKeyAuthenticator` が、実際の
       検証器と同じ `Authenticator` インターフェースの背後で代わりを務めており、後で差し替えても
       呼び出し側には影響しない。
-- [ ] ユニット10：OpenTelemetry の信号と、基盤に固有の4つのメトリクス。
+- [x] ユニット10：OpenTelemetry の信号と、基盤に固有の4つのメトリクス。
+      `internal/platform/observability` が、トレースとメトリクスの両プロバイダ（`Setup`、既存）に加えて
+      構造化ログの基盤も構築する。`NewLogger` は、JSON ハンドラを使う `*slog.Logger` を1行1レコードで
+      返す。サードパーティのロガーや OpenTelemetry 自身のログモジュールではなく標準ライブラリを使うのは、
+      本項目自身が掲げる運用の単純さという方針に沿うからである。`cmd/server/main.go` は起動と終了の
+      ロガーを `NewLogger` から得る。`internal/platform/connectserver` の `NewMux` は、新設した
+      `loggingInterceptor`（`internal/platform/connectserver/logging.go`）を、既存の `otelconnect`
+      インターセプタと並べて各サービスのインターセプタ連鎖へ組み込み、トレースがすでに覆っているのと
+      同じ境界でリクエストの失敗を記録する。基盤に固有の4つのメトリクスは、いまやすべて出ている。
+      ペイロードの切り詰め回数（`internal/delivery/payload/payload.go`、
+      `citywalk.delivery.payload_truncation_count`）は本パスに先行する。所属の突き合わせで食い違った
+      件数（`internal/membership/batch/batch.go`、`citywalk.membership.reconciliation_disagreement_count`、
+      セグメント単位）は新規である。`Recompute` は本パス以前から食い違いの数を `Report` に返していたが、
+      それをメトリクスへ変える処理はなかった。理由ごとの抑止件数
+      （`internal/platform/connectserver/delivery.go`、`citywalk.governance.suppression_count`）も新規
+      であり、`checkProjectBudget` が既存の `project_budget` 抑止イベントの記録にあわせて加算する。
+      CW-0007 の他の抑止理由は未実装のため、いまのところこのカウンタが持つ理由は `project_budget` だけ
+      である。そして非対応のスキーマバージョンのために飛ばされたメッセージの件数
+      （`internal/delivery/payload/payload.go`、`citywalk.delivery.schema_version_skip_count`）も新規で
+      あり、`buildEntry` がチャネルの申告したスキーマのメジャーバージョンに一致するバリアントを見つけら
+      れない箇所で加算する。`internal/platform/observability/observability_test.go` は、このロガーが
+      1行1レコードのパース可能な JSON を出すことを示す。
 - [ ] ユニット11：第1段階は単一プロセス、第2段階でログと列指向ストアを導入する。
 
 ## 参考

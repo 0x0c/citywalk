@@ -17,10 +17,18 @@ import (
 	"github.com/0x0c/citywalk/gen/citywalk/event/v1/eventv1connect"
 	"github.com/0x0c/citywalk/gen/citywalk/platform/v1/platformv1connect"
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
+	"github.com/0x0c/citywalk/internal/platform/observability"
 )
 
+// serviceName identifies this process to the logger NewMux builds for its request-boundary logging,
+// matching the name main.go gives observability.Setup for traces and metrics (CW-0010 Unit 11: one
+// process, one service identity, in phase one).
+const serviceName = "citywalk-server"
+
 // NewMux builds the HTTP handler serving every Connect service the process hosts, instrumented with
-// OpenTelemetry so every request carries the trace and metric signals CW-0010 Unit 10 requires. pool
+// OpenTelemetry so every request carries the trace and metric signals CW-0010 Unit 10 requires, and
+// with loggingInterceptor so a handler error also reaches that unit's structured-log signal at the
+// same request boundary. pool
 // and redisClient may be nil (both are optional in phase one, per CW-0010 Unit 11). DeliveryService
 // is registered whenever pool is set, since Confirm needs only Postgres; Sync additionally needs
 // redisClient and reports so per call (see DeliveryServer.Sync) rather than the whole service being
@@ -46,14 +54,15 @@ func NewMux(
 	if err != nil {
 		return nil, err
 	}
-	interceptors := connect.WithInterceptors(otelInterceptor)
+	logger := observability.NewLogger(serviceName)
+	interceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger))
 
 	mux := http.NewServeMux()
 	healthPath, healthHandler := platformv1connect.NewHealthServiceHandler(HealthServer{}, interceptors)
 	mux.Handle(healthPath, healthHandler)
 
 	if pool != nil && len(tokenSigningSecret) > 0 {
-		deviceInterceptors := connect.WithInterceptors(otelInterceptor, deviceAuthInterceptor(tokenSigningSecret))
+		deviceInterceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger), deviceAuthInterceptor(tokenSigningSecret))
 
 		deliveryPath, deliveryHandler := deliveryv1connect.NewDeliveryServiceHandler(
 			DeliveryServer{Pool: pool, Redis: redisClient}, deviceInterceptors,
@@ -72,7 +81,7 @@ func NewMux(
 	}
 
 	if pool != nil && adminAuthenticator != nil {
-		adminInterceptors := connect.WithInterceptors(otelInterceptor, adminAuthInterceptor(adminAuthenticator, adminRoleByProcedure))
+		adminInterceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger), adminAuthInterceptor(adminAuthenticator, adminRoleByProcedure))
 		adminPath, adminHandler := adminv1connect.NewAdminServiceHandler(
 			AdminServer{Pool: pool}, adminInterceptors,
 		)

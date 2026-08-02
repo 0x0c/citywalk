@@ -253,7 +253,30 @@ services later is cheap when the boundaries already exist and expensive when the
       JSON Web Key Set (JWKS) endpoint, client id), which this repository has no access to; a
       `StaticKeyAuthenticator` stands in behind the same `Authenticator` interface a real verifier
       would implement, so swapping it in later touches no caller.
-- [ ] Unit 10 — OpenTelemetry signals plus the four platform-specific metrics.
+- [x] Unit 10 — OpenTelemetry signals plus the four platform-specific metrics.
+      `internal/platform/observability` builds the trace and metric providers (`Setup`, pre-existing)
+      and now the structured logger too, via `NewLogger`: a `*slog.Logger` with a JSON handler, one
+      record per line, using the standard library rather than a third-party logger or OpenTelemetry's
+      own logging modules, per this item's own operational-simplicity bias. `cmd/server/main.go`
+      sources its startup and shutdown logger from `NewLogger`, and `NewMux`
+      (`internal/platform/connectserver`) wires its new `loggingInterceptor`
+      (`internal/platform/connectserver/logging.go`) into every service's interceptor chain alongside
+      the existing `otelconnect` interceptor, logging a request-boundary error at the same seam
+      tracing already covers. All four named metrics are now emitted: the payload truncation count
+      (`internal/delivery/payload/payload.go`, `citywalk.delivery.payload_truncation_count`) predates
+      this pass; the membership reconciliation disagreement count
+      (`internal/membership/batch/batch.go`,
+      `citywalk.membership.reconciliation_disagreement_count`, by segment) is new — `Recompute`
+      returned the disagreement in its `Report` before this pass, but nothing turned that figure into
+      a metric; the suppression count by reason (`internal/platform/connectserver/delivery.go`,
+      `citywalk.governance.suppression_count`) is also new, incremented in `checkProjectBudget`
+      alongside the `project_budget` suppression event it already records — CW-0007's other suppression
+      reasons remain unimplemented, so `project_budget` is the sole reason the counter carries so far;
+      and the schema-version-skip count (`internal/delivery/payload/payload.go`,
+      `citywalk.delivery.schema_version_skip_count`) is new as well, incremented where `buildEntry`
+      finds no variant matching the channel's declared schema major.
+      `internal/platform/observability/observability_test.go` proves the logger emits one parseable
+      JSON record per line.
 - [ ] Unit 11 — Phase one as a single process; log and columnar store in phase two.
 
 ## References

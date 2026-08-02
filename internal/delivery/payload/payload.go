@@ -63,6 +63,12 @@ type Payload struct {
 // that goes unrecorded looks exactly like a campaign nobody qualified for.
 var truncationCounter = mustCounter()
 
+// schemaVersionSkipCounter records CW-0010 Unit 10's other named metric this package owns: a message
+// skipped because no variant matches the channel's declared schema major (CW-0003 Unit 4) looks
+// exactly like a channel that never qualified for it at all, without this counter to tell the two
+// apart.
+var schemaVersionSkipCounter = mustSchemaVersionSkipCounter()
+
 func mustCounter() metric.Int64Counter {
 	c, err := otel.Meter("citywalk/delivery/payload").Int64Counter(
 		"citywalk.delivery.payload_truncation_count",
@@ -71,6 +77,17 @@ func mustCounter() metric.Int64Counter {
 	if err != nil {
 		// Int64Counter only fails on a malformed instrument name, which is fixed at compile time —
 		// a real failure here would mean this package itself is broken, not a runtime condition.
+		panic(err)
+	}
+	return c
+}
+
+func mustSchemaVersionSkipCounter() metric.Int64Counter {
+	c, err := otel.Meter("citywalk/delivery/payload").Int64Counter(
+		"citywalk.delivery.schema_version_skip_count",
+		metric.WithDescription("Count of messages skipped because no variant matches the channel's declared schema major version"),
+	)
+	if err != nil {
 		panic(err)
 	}
 	return c
@@ -170,6 +187,9 @@ func buildEntry(ctx context.Context, pool *pgxpool.Pool, msg model.Message, lang
 
 	compatibleVariants := variantsSupportingMajor(msg.Variants, declaredMajor)
 	if len(compatibleVariants) == 0 {
+		schemaVersionSkipCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.Int("citywalk.delivery.declared_schema_major", declaredMajor),
+		))
 		return Entry{}, false, nil
 	}
 

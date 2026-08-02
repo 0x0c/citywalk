@@ -26,7 +26,7 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.NewLogger("citywalk-server")
 	if err := run(logger); err != nil {
 		logger.Error("server exited with error", slog.Any("error", err))
 		os.Exit(1)

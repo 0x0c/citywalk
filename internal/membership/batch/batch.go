@@ -12,6 +12,9 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/0x0c/citywalk/internal/audience/predicate"
 	"github.com/0x0c/citywalk/internal/audience/registry"
@@ -20,6 +23,23 @@ import (
 	"github.com/0x0c/citywalk/internal/membership/reverse"
 	"github.com/0x0c/citywalk/internal/membership/segment"
 )
+
+// disagreementCounter records CW-0010 Unit 10's named membership-reconciliation-disagreement-count
+// metric, by segment: a segment whose index has quietly drifted from what its predicate actually
+// matches looks exactly like a segment nobody has qualified for lately, without this counter to
+// distinguish the two.
+var disagreementCounter = mustDisagreementCounter()
+
+func mustDisagreementCounter() metric.Int64Counter {
+	c, err := otel.Meter("citywalk/membership/batch").Int64Counter(
+		"citywalk.membership.reconciliation_disagreement_count",
+		metric.WithDescription("Count of channels whose segment membership disagreed with the reverse index immediately before a recomputation swap, by segment"),
+	)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
 
 // Report summarizes one Recompute call: the generation it wrote, and — CW-0005 Unit 6's health
 // metric — how many channels' membership in each segment disagreed with the index as it stood
@@ -68,7 +88,13 @@ func Recompute(ctx context.Context, pool *pgxpool.Pool, redisClient *redis.Clien
 		if err != nil {
 			return Report{}, fmt.Errorf("batch: read prior bitmap for segment %s: %w", seg.ID, err)
 		}
-		disagreements[seg.ID] = int(roaring.Xor(oldBM, newBM).GetCardinality())
+		disagreement := int(roaring.Xor(oldBM, newBM).GetCardinality())
+		disagreements[seg.ID] = disagreement
+		if disagreement > 0 {
+			disagreementCounter.Add(ctx, int64(disagreement), metric.WithAttributes(
+				attribute.String("citywalk.membership.segment_id", seg.ID),
+			))
+		}
 		newBitmaps[seg.ID] = newBM
 
 		it := newBM.Iterator()

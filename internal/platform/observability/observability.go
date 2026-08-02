@@ -1,12 +1,18 @@
-// Package observability bootstraps the OpenTelemetry signals CW-0010 Unit 10 requires of every
-// service: traces, metrics, and structured logs. The four platform-specific metrics that unit also
-// names (payload truncation, membership reconciliation disagreement, suppression by reason, and
-// unsupported schema version) are registered by the services that produce them, not here.
+// Package observability bootstraps the signals CW-0010 Unit 10 requires of every service: traces,
+// metrics, and structured logs. The four platform-specific metrics that unit also names (payload
+// truncation, membership reconciliation disagreement, suppression by reason, and unsupported schema
+// version) are registered by the services that produce them, not here. Structured logging uses the
+// standard library's log/slog rather than OpenTelemetry's own logging modules or a third-party
+// logger — CW-0010 Unit 2's operational-simplicity bias, and slog is already sufficient for a single
+// JSON-per-line stream with no separate log backend in phase one (Unit 11).
 package observability
 
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
@@ -72,4 +78,16 @@ func Setup(ctx context.Context, serviceName string) (Providers, error) {
 			return nil
 		},
 	}, nil
+}
+
+// NewLogger constructs the process-wide structured logger: JSON, one record per line, suitable for a
+// log collector to parse rather than a human terminal. serviceName is attached to every record, the
+// same resource dimension Setup gives traces and metrics, so a multi-service log stream filters down
+// to this one service the same way a trace or a metric would.
+func NewLogger(serviceName string) *slog.Logger {
+	return newLogger(os.Stdout, serviceName)
+}
+
+func newLogger(w io.Writer, serviceName string) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(w, nil)).With(slog.String("service", serviceName))
 }
