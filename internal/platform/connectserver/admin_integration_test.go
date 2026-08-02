@@ -73,7 +73,7 @@ func TestCreateMessageRPCPersistsAValidatedDraft(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestCreateMessageRPCRejectsAnInvalidDefinition(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestCreateMessageRPCRejectsAViewer(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestCreateMessageRPCRejectsAnUnauthenticatedCaller(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestUpdateMessageStateRPCRecordsTheAuthenticatedActor(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestUpdateMessageStateRPCRecordsTheChangeLog(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestUpdateMessageStateRPCRejectsABackwardTransition(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestGetMessageRPCRejectsAnUnknownMessage(t *testing.T) {
 	pool := adminTestPool(t)
 	ctx := context.Background()
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}

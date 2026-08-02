@@ -103,7 +103,7 @@ func TestBuildAssemblesAnEligiblePayloadWithNoAudienceData(t *testing.T) {
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	p, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	p, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestBuildExcludesAnIneligibleChannel(t *testing.T) {
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	p, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	p, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestBuildTruncatesInPriorityOrder(t *testing.T) {
 
 	// Fetch the untruncated payload first to learn one entry's real encoded size, then set the
 	// ceiling to fit exactly one.
-	full, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	full, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (untruncated): %v", err)
 	}
@@ -207,7 +207,7 @@ func TestBuildTruncatesInPriorityOrder(t *testing.T) {
 	}
 	ceiling := len(full.Entries[0].Content)
 
-	truncated, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, ceiling, 15*time.Minute, 0.2)
+	truncated, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, ceiling, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (truncated): %v", err)
 	}
@@ -257,7 +257,7 @@ func TestBuildAssignsAVariantDeterministicallyAcrossMultipleVariants(t *testing.
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	first, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	first, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (first): %v", err)
 	}
@@ -277,7 +277,7 @@ func TestBuildAssignsAVariantDeterministicallyAcrossMultipleVariants(t *testing.
 	}
 
 	for i := 0; i < 5; i++ {
-		again, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+		again, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2)
 		if err != nil {
 			t.Fatalf("Build (repeat %d): %v", i, err)
 		}
@@ -325,7 +325,7 @@ func TestBuildExcludesAMessageWhenTheChannelLandsInItsHoldout(t *testing.T) {
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	p, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	p, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestBuildEmitsAHoldoutQualifiedEventWhenTheChannelLandsInItsHoldout(t *test
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	p, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	p, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestHoldoutQualifiedEventFromBuildIsCountedByAttribution(t *testing.T) {
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	if _, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2); err != nil {
+	if _, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 
@@ -499,7 +499,7 @@ func TestBuildExcludesAMessageWithNoVariantSupportingTheChannelsDeclaredSchemaMa
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	p, err := payload.Build(ctx, pool, redisClient, channelID, "en", now, 0, 15*time.Minute, 0.2)
+	p, err := payload.Build(ctx, pool, redisClient, nil, channelID, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/0x0c/citywalk/internal/delivery/etag"
 	"github.com/0x0c/citywalk/internal/delivery/payload"
 	deliverysync "github.com/0x0c/citywalk/internal/delivery/sync"
+	"github.com/0x0c/citywalk/internal/event/ingest"
 	"github.com/0x0c/citywalk/internal/governance/budget"
 	"github.com/0x0c/citywalk/internal/membership/reverse"
 )
@@ -80,8 +81,10 @@ func tagKey(channelID string) string {
 // happens to still match what the device already holds. When cfg.DeltaModeEnabled and clientCursor
 // can still be honored (CW-0006 Unit 3), the returned Payload carries only what changed since that
 // cursor, plus tombstones, instead of the full assembled payload.
+// publisher is where a holdout-qualified event Sync's payload assembly discovers along the way is
+// recorded (CW-0010 Unit 11's staged adoption); see payload.Build's doc comment for the nil default.
 func Sync(
-	ctx context.Context, pool *pgxpool.Pool, redisClient *redis.Client,
+	ctx context.Context, pool *pgxpool.Pool, redisClient *redis.Client, publisher ingest.Publisher,
 	channelID, language, clientETag, clientCursor string, now time.Time, cfg Config,
 ) (Result, error) {
 	if clientETag != "" {
@@ -95,7 +98,7 @@ func Sync(
 		}
 	}
 
-	p, err := payload.Build(ctx, pool, redisClient, channelID, language, now, cfg.SizeCeilingBytes, cfg.SyncInterval, cfg.SyncJitterFraction)
+	p, err := payload.Build(ctx, pool, redisClient, publisher, channelID, language, now, cfg.SizeCeilingBytes, cfg.SyncInterval, cfg.SyncJitterFraction)
 	if err != nil {
 		return Result{}, fmt.Errorf("deliver: build payload: %w", err)
 	}

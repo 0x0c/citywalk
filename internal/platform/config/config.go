@@ -12,6 +12,16 @@ import (
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
 )
 
+// EventPublisherPostgres and EventPublisherLog are EventPublisherMode's two values: CW-0010 Unit 11's
+// staged-adoption switch between phase one's direct write to events_log and phase two's
+// Kafka-compatible log (CW-0010 Unit 5). EventPublisherPostgres is the default Load applies when
+// CITYWALK_EVENT_PUBLISHER is unset, since the log's cutover is a later operational decision this
+// configuration flag makes possible, not one this pass throws by default.
+const (
+	EventPublisherPostgres = "postgres"
+	EventPublisherLog      = "log"
+)
+
 // Config is the phase-one single process configuration (CW-0010 Unit 11): the definition, audience,
 // and delivery services run together against one PostgreSQL and one Redis instance.
 type Config struct {
@@ -44,6 +54,16 @@ type Config struct {
 	// Flipping this is the operational decision Unit 11 reserves for once event volume justifies the
 	// second phase; citywalk has no real production traffic yet, so it defaults to off.
 	ClickHouseMirrorEnabled bool
+	// EventPublisherMode selects where internal/event/ingest.Accept and .Record write an accepted
+	// event batch: EventPublisherPostgres (the default) writes directly to events_log, exactly as
+	// phase one always has; EventPublisherLog writes to the Kafka-compatible log instead
+	// (internal/platform/eventlog, CW-0010 Unit 5), and additionally requires EventLogBrokers.
+	EventPublisherMode string
+	// EventLogBrokers is the Kafka-compatible log's seed broker addresses (CW-0010 Unit 5). Read and
+	// required only when EventPublisherMode is EventPublisherLog.
+	EventLogBrokers []string
+	// EventLogTopic is the log's topic name. Read only when EventPublisherMode is EventPublisherLog.
+	EventLogTopic string
 }
 
 // Load reads the configuration from environment variables, applying defaults for anything a phase-one
@@ -66,9 +86,26 @@ func Load() (Config, error) {
 		AdminKeys:               adminKeys,
 		ClickHouseDSN:           os.Getenv("CITYWALK_CLICKHOUSE_DSN"),
 		ClickHouseMirrorEnabled: clickHouseMirrorEnabled,
+		EventPublisherMode:      getenv("CITYWALK_EVENT_PUBLISHER", EventPublisherPostgres),
+		EventLogBrokers:         parseEventLogBrokers(os.Getenv("CITYWALK_EVENT_LOG_BROKERS")),
+		EventLogTopic:           getenv("CITYWALK_EVENT_LOG_TOPIC", "citywalk.events"),
 	}
 	if cfg.ListenAddr == "" {
 		return Config{}, fmt.Errorf("config: CITYWALK_LISTEN_ADDR must not be empty")
+	}
+	switch cfg.EventPublisherMode {
+	case EventPublisherPostgres:
+		// No further requirement: phase one's default, always available.
+	case EventPublisherLog:
+		if len(cfg.EventLogBrokers) == 0 {
+			return Config{}, fmt.Errorf(
+				"config: CITYWALK_EVENT_PUBLISHER=%s requires CITYWALK_EVENT_LOG_BROKERS to be set", EventPublisherLog,
+			)
+		}
+	default:
+		return Config{}, fmt.Errorf(
+			"config: CITYWALK_EVENT_PUBLISHER=%q is not %q or %q", cfg.EventPublisherMode, EventPublisherPostgres, EventPublisherLog,
+		)
 	}
 	return cfg, nil
 }
@@ -87,6 +124,24 @@ func parseBool(name, raw string) (bool, error) {
 		return false, fmt.Errorf("%s must be a boolean (true/false), got %q", name, raw)
 	}
 	return v, nil
+}
+
+// parseEventLogBrokers splits a comma-separated CITYWALK_EVENT_LOG_BROKERS into its addresses,
+// trimming whitespace and dropping empty entries (a trailing comma, for instance) rather than passing
+// a blank broker address through to eventlog.Config.
+func parseEventLogBrokers(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var brokers []string
+	for _, b := range strings.Split(raw, ",") {
+		b = strings.TrimSpace(b)
+		if b == "" {
+			continue
+		}
+		brokers = append(brokers, b)
+	}
+	return brokers
 }
 
 // parseAdminKeys decodes CITYWALK_ADMIN_API_KEYS: a comma-separated list of

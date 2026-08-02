@@ -103,10 +103,17 @@ func mustSchemaVersionSkipCounter() metric.Int64Counter {
 // content computation that does not depend on channelID's own identity runs through CW-0006 Unit 4's
 // shared bundle cache (see sharedBundleFor in bundle.go); CW-0008's per-channel variant assignment
 // and holdout always run fresh, never cached, regardless of whether the bundle was a hit or a miss.
+// publisher is where a holdout-qualified event Build discovers along the way is recorded (CW-0010
+// Unit 11's staged adoption). A nil publisher defaults to ingest.PostgresPublisher{Pool: pool}, phase
+// one's direct write to events_log — the same default NewMux applies for the device-facing Submit
+// path, so both of ingest.Record's callers land on the log consistently once phase two is configured.
 func Build(
-	ctx context.Context, pool *pgxpool.Pool, redisClient *redis.Client,
+	ctx context.Context, pool *pgxpool.Pool, redisClient *redis.Client, publisher ingest.Publisher,
 	channelID, language string, now time.Time, sizeCeilingBytes int, syncInterval time.Duration, syncJitterFraction float64,
 ) (Payload, error) {
+	if publisher == nil {
+		publisher = ingest.PostgresPublisher{Pool: pool}
+	}
 	nextSync := deliverysync.NextSyncAt(now, syncInterval, syncJitterFraction)
 
 	segmentBM, err := reverse.Get(ctx, redisClient, channelID)
@@ -129,7 +136,7 @@ func Build(
 
 	var entries []Entry
 	for _, bm := range b.Messages {
-		entry, included, err := applyOverlay(ctx, pool, bm, channelID, now)
+		entry, included, err := applyOverlay(ctx, publisher, bm, channelID, now)
 		if err != nil {
 			return Payload{}, fmt.Errorf("payload: apply overlay for message %s: %w", bm.MessageID, err)
 		}
@@ -162,7 +169,7 @@ func Build(
 // ChannelID) and msg.ID are already known to reference live rows by the time applyOverlay (bundle.go)
 // calls this, so a failure here — unlike the exclusion itself — is a real error rather than something
 // to swallow.
-func recordHoldoutQualified(ctx context.Context, pool *pgxpool.Pool, msg model.Message, identity string, now time.Time) error {
+func recordHoldoutQualified(ctx context.Context, publisher ingest.Publisher, msg model.Message, identity string, now time.Time) error {
 	event := eventmodel.Event{
 		ID:         uuid.NewString(),
 		ChannelID:  identity,
@@ -170,7 +177,7 @@ func recordHoldoutQualified(ctx context.Context, pool *pgxpool.Pool, msg model.M
 		DeviceTime: now,
 		MessageID:  msg.ID,
 	}
-	if err := ingest.Record(ctx, pool, event, now); err != nil {
+	if err := ingest.Record(ctx, publisher, event, now); err != nil {
 		return fmt.Errorf("payload: record holdout qualified for message %s: %w", msg.ID, err)
 	}
 	return nil

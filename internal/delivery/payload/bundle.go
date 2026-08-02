@@ -21,6 +21,7 @@ import (
 
 	"github.com/0x0c/citywalk/internal/definition/model"
 	"github.com/0x0c/citywalk/internal/definition/store"
+	"github.com/0x0c/citywalk/internal/event/ingest"
 	"github.com/0x0c/citywalk/internal/membership/reverse"
 )
 
@@ -227,7 +228,7 @@ func toBundleVariant(v model.Variant) (bundleVariant, error) {
 // identity landed in bm's own holdout — eligible in every respect, but no entry — mirroring the
 // pre-Unit-4 buildEntry's contract exactly, since this is that same per-channel logic, only now fed
 // from a bundle instead of a freshly loaded model.Message.
-func applyOverlay(ctx context.Context, pool *pgxpool.Pool, bm bundleMessage, identity string, now time.Time) (Entry, bool, error) {
+func applyOverlay(ctx context.Context, publisher ingest.Publisher, bm bundleMessage, identity string, now time.Time) (Entry, bool, error) {
 	variant := bm.FallbackVariant
 	if len(bm.LanguageVariants) > 0 {
 		selected, isHoldout, err := assignVariant(bm.asModelMessage(), toModelVariants(bm.LanguageVariants), identity)
@@ -235,7 +236,7 @@ func applyOverlay(ctx context.Context, pool *pgxpool.Pool, bm bundleMessage, ide
 			return Entry{}, false, err
 		}
 		if isHoldout {
-			if err := recordHoldoutQualified(ctx, pool, bm.asModelMessage(), identity, now); err != nil {
+			if err := recordHoldoutQualified(ctx, publisher, bm.asModelMessage(), identity, now); err != nil {
 				return Entry{}, false, err
 			}
 			return Entry{}, false, nil

@@ -77,7 +77,7 @@ func TestRollupRecomputeWorkerWorkInvokesRunOnce(t *testing.T) {
 	events := []model.Event{
 		{ID: "01912d2c-0000-7000-8000-000000000001", ChannelID: channelID, Kind: model.KindCustom, Name: "screen_view", DeviceTime: now},
 	}
-	if _, err := ingest.Accept(ctx, pool, limiter, channelID, events, now); err != nil {
+	if _, err := ingest.Accept(ctx, ingest.PostgresPublisher{Pool: pool}, limiter, channelID, events, now); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 

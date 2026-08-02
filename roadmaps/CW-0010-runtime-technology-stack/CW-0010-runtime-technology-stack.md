@@ -256,7 +256,25 @@ justifies it. Load pressure never forces a second engineering project instead.
       CW-0006 Unit 4), keyed by language, declared schema major, and a hash of the channel's
       membership bitmap, with campaign-keyed invalidation through a Redis set index. Everything here
       is derived or expiring except the counters, exactly as this unit's own text accepts.
-- [ ] Unit 5 — The Kafka-compatible log and its consumer positions.
+- [x] Unit 5 — The Kafka-compatible log and its consumer positions.
+      `internal/platform/eventlog` wraps a real `franz-go` producer and consumer against a
+      Kafka-compatible broker — Redpanda is the deployment target, but franz-go speaks the wire
+      protocol rather than anything Redpanda-specific, so the integration suite below runs against a
+      real Kafka broker instead. `Producer.Publish` keys every record by channel identifier
+      (`PartitionKey`), so one channel's events always land on one partition and come back in order;
+      `Consumer.Poll` and `Consumer.Commit` track position as a Kafka consumer group's own committed
+      offsets rather than a reinvented table. `internal/event/model`'s `EncodeLog` and `DecodeLogEvent`
+      hold the wire format both the publisher and the consumer glue (`internal/event/ingest.LogPublisher`,
+      `internal/event/consumer.RunOnceFromLog`) share. `internal/platform/config`'s
+      CITYWALK_EVENT_PUBLISHER flag selects this path; it defaults to the existing direct write to
+      Postgres, per Unit 11, so this is real, tested code, not the active path by default. Everything
+      that does not need a live broker — partition-key derivation, configuration selection and
+      validation, and message encoding and decoding — is unit-tested; the produce-consume-commit round
+      trip and the per-channel ordering guarantee run against a real broker in
+      `internal/platform/eventlog/eventlog_integration_test.go` and
+      `internal/event/eventlog_pipeline_integration_test.go`, gated by `//go:build integration` and
+      CITYWALK_TEST_KAFKA_BROKERS. No broker was reachable in this sandbox (port 9092 closed) to run
+      that suite.
 - [x] Unit 6 — ClickHouse storage, rollups, and the 13-month retention.
       `internal/platform/clickhouse` wraps a `clickhouse-go` connection (`New`) and the raw-events
       schema this unit's own text calls for: `events_raw`, a `ReplacingMergeTree(server_time)` table

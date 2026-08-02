@@ -192,7 +192,7 @@ func TestSyncDeltaModeGivesAFullPayloadAndAFreshCursorOnFirstRequest(t *testing.
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
 	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Hi", now)
 
-	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, deltaTestConfig())
+	result, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", "", now, deltaTestConfig())
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestSyncDeltaModeReturnsOnlyTheChangedEntry(t *testing.T) {
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
 	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Unchanged", now)
 
-	first, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, cfg)
+	first, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", "", now, cfg)
 	if err != nil {
 		t.Fatalf("Sync (first): %v", err)
 	}
@@ -234,7 +234,7 @@ func TestSyncDeltaModeReturnsOnlyTheChangedEntry(t *testing.T) {
 	// does not advance, so first.ETag would still be a cache hit and short-circuit before Unit 3's
 	// delta path ever runs — the same reason TestSyncWithAStaleTagReturnsTheNewPayload above uses a
 	// synthetic tag rather than reusing a prior real one.
-	second, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "stale-etag-from-before", first.Cursor, later, cfg)
+	second, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "stale-etag-from-before", first.Cursor, later, cfg)
 	if err != nil {
 		t.Fatalf("Sync (second): %v", err)
 	}
@@ -264,7 +264,7 @@ func TestSyncDeltaModeReturnsATombstoneForARemovedMessage(t *testing.T) {
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
 	messageID := insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Will be paused", now)
 
-	first, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, cfg)
+	first, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", "", now, cfg)
 	if err != nil {
 		t.Fatalf("Sync (first): %v", err)
 	}
@@ -287,7 +287,7 @@ func TestSyncDeltaModeReturnsATombstoneForARemovedMessage(t *testing.T) {
 
 	// A deliberately stale ETag, not first.ETag — see TestSyncDeltaModeReturnsOnlyTheChangedEntry's
 	// own comment on why reusing the real prior tag would hit the wall-clock TTL cache instead.
-	second, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "stale-etag-from-before", first.Cursor, later, cfg)
+	second, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "stale-etag-from-before", first.Cursor, later, cfg)
 	if err != nil {
 		t.Fatalf("Sync (second): %v", err)
 	}
@@ -313,7 +313,7 @@ func TestSyncDeltaModeFallsBackToFullOnAnUnrecognizedCursor(t *testing.T) {
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
 	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Hi", now)
 
-	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "garbage-not-a-real-cursor", now, deltaTestConfig())
+	result, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", "garbage-not-a-real-cursor", now, deltaTestConfig())
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestSyncDeltaModeFallsBackToFullWhenTheCursorPredatesTheRetentionWindow(t *
 		Seq: 0, MembershipHash: membershipHash, IssuedAt: now.Add(-changelog.Retention - time.Hour),
 	})
 
-	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", staleCursor, now, deltaTestConfig())
+	result, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", staleCursor, now, deltaTestConfig())
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestSyncDeltaModeDisabledNeverProducesADeltaOrACursor(t *testing.T) {
 	channelID, segmentID := setUpChannelAndSegment(t, ctx, pool, redisClient)
 	insertActiveMessageAndRecordUpsert(t, ctx, pool, redisClient, segmentID, "Hi", now)
 
-	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "some-cursor-that-is-ignored", now, testConfig())
+	result, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", "some-cursor-that-is-ignored", now, testConfig())
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestSyncFirstRequestReturnsThePayload(t *testing.T) {
 
 	channelID := setUpEligibleChannel(t, ctx, pool, redisClient, now)
 
-	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, testConfig())
+	result, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", "", now, testConfig())
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -425,12 +425,12 @@ func TestSyncWithAMatchingTagServesTheFastPathWithNoAssembly(t *testing.T) {
 
 	channelID := setUpEligibleChannel(t, ctx, pool, redisClient, now)
 
-	first, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, testConfig())
+	first, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", "", now, testConfig())
 	if err != nil {
 		t.Fatalf("Sync (first): %v", err)
 	}
 
-	second, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", first.ETag, "", now.Add(time.Minute), testConfig())
+	second, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", first.ETag, "", now.Add(time.Minute), testConfig())
 	if err != nil {
 		t.Fatalf("Sync (second): %v", err)
 	}
@@ -454,7 +454,7 @@ func TestSyncWithAStaleTagReturnsTheNewPayload(t *testing.T) {
 
 	channelID := setUpEligibleChannel(t, ctx, pool, redisClient, now)
 
-	result, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "some-stale-tag-from-before", "", now, testConfig())
+	result, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "some-stale-tag-from-before", "", now, testConfig())
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestSyncAlwaysReturnsANextSyncAt(t *testing.T) {
 	channelID := setUpEligibleChannel(t, ctx, pool, redisClient, now)
 	cfg := testConfig()
 
-	first, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", "", "", now, cfg)
+	first, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", "", "", now, cfg)
 	if err != nil {
 		t.Fatalf("Sync (first): %v", err)
 	}
@@ -484,7 +484,7 @@ func TestSyncAlwaysReturnsANextSyncAt(t *testing.T) {
 		t.Errorf("NextSyncAt = %v, want after %v", first.NextSyncAt, now)
 	}
 
-	second, err := deliver.Sync(ctx, pool, redisClient, channelID, "en", first.ETag, "", now.Add(time.Minute), cfg)
+	second, err := deliver.Sync(ctx, pool, redisClient, nil, channelID, "en", first.ETag, "", now.Add(time.Minute), cfg)
 	if err != nil {
 		t.Fatalf("Sync (second): %v", err)
 	}

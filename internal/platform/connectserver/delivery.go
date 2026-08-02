@@ -65,6 +65,9 @@ type DeliveryServer struct {
 	// matches defaultSyncConfig's own "off by default" for every construction site that predates
 	// Unit 3.
 	DeltaModeEnabled bool
+	// Publisher is where checkProjectBudget's suppression event lands (CW-0010 Unit 11's staged
+	// adoption). NewMux defaults it to ingest.PostgresPublisher{Pool: Pool} whenever Pool is set.
+	Publisher ingest.Publisher
 }
 
 func (s DeliveryServer) Sync(
@@ -80,7 +83,7 @@ func (s DeliveryServer) Sync(
 	}
 	cfg := defaultSyncConfig
 	cfg.DeltaModeEnabled = s.DeltaModeEnabled
-	result, err := deliver.Sync(ctx, s.Pool, s.Redis, channelID, req.Msg.GetLanguage(), req.Msg.GetEtag(), req.Msg.GetCursor(), time.Now(), cfg)
+	result, err := deliver.Sync(ctx, s.Pool, s.Redis, s.Publisher, channelID, req.Msg.GetLanguage(), req.Msg.GetEtag(), req.Msg.GetCursor(), time.Now(), cfg)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -225,7 +228,7 @@ func (s DeliveryServer) checkProjectBudget(ctx context.Context, messageID, chann
 			MessageID:         messageID,
 			SuppressionReason: eventmodel.ReasonProjectBudget,
 		}
-		if err := ingest.Record(ctx, s.Pool, suppression, now); err != nil {
+		if err := ingest.Record(ctx, s.Publisher, suppression, now); err != nil {
 			return false, fmt.Errorf("checkProjectBudget: record suppression: %w", err)
 		}
 		suppressionCounter.Add(ctx, 1, metric.WithAttributes(

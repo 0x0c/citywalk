@@ -112,11 +112,11 @@ func TestBuildAppliesVariantAssignmentFreshPerChannelFromASharedBundle(t *testin
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	pA, err := payload.Build(ctx, pool, redisClient, channelA, "en", now, 0, 15*time.Minute, 0.2)
+	pA, err := payload.Build(ctx, pool, redisClient, nil, channelA, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (channel A): %v", err)
 	}
-	pB, err := payload.Build(ctx, pool, redisClient, channelB, "en", now, 0, 15*time.Minute, 0.2)
+	pB, err := payload.Build(ctx, pool, redisClient, nil, channelB, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (channel B): %v", err)
 	}
@@ -131,7 +131,7 @@ func TestBuildAppliesVariantAssignmentFreshPerChannelFromASharedBundle(t *testin
 	// Channel A's own repeat synchronization — now unambiguously a cache hit on the bundle — is
 	// still deterministic and still its own assignment, CW-0008's whole premise applied on top of
 	// Unit 4's cache.
-	again, err := payload.Build(ctx, pool, redisClient, channelA, "en", now, 0, 15*time.Minute, 0.2)
+	again, err := payload.Build(ctx, pool, redisClient, nil, channelA, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (channel A again): %v", err)
 	}
@@ -177,14 +177,14 @@ func TestInvalidateCampaignDropsOnlyBundlesContainingTheEditedMessage(t *testing
 	}
 
 	// Populate both bundles.
-	pJP, err := payload.Build(ctx, pool, redisClient, channelJP, "en", now, 0, 15*time.Minute, 0.2)
+	pJP, err := payload.Build(ctx, pool, redisClient, nil, channelJP, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (JP, before): %v", err)
 	}
 	if len(pJP.Entries) != 1 || pJP.Entries[0].MessageID != msgJPID {
 		t.Fatalf("Build (JP, before) = %+v, want exactly %s", pJP.Entries, msgJPID)
 	}
-	pUS, err := payload.Build(ctx, pool, redisClient, channelUS, "en", now, 0, 15*time.Minute, 0.2)
+	pUS, err := payload.Build(ctx, pool, redisClient, nil, channelUS, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (US, before): %v", err)
 	}
@@ -207,7 +207,7 @@ func TestInvalidateCampaignDropsOnlyBundlesContainingTheEditedMessage(t *testing
 		t.Fatalf("InvalidateCampaign: %v", err)
 	}
 
-	pJPAfter, err := payload.Build(ctx, pool, redisClient, channelJP, "en", now, 0, 15*time.Minute, 0.2)
+	pJPAfter, err := payload.Build(ctx, pool, redisClient, nil, channelJP, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (JP, after): %v", err)
 	}
@@ -215,7 +215,7 @@ func TestInvalidateCampaignDropsOnlyBundlesContainingTheEditedMessage(t *testing
 		t.Errorf("Build (JP, after) = %+v, want none — the invalidated bundle should reflect the pause", pJPAfter.Entries)
 	}
 
-	pUSAfter, err := payload.Build(ctx, pool, redisClient, channelUS, "en", now, 0, 15*time.Minute, 0.2)
+	pUSAfter, err := payload.Build(ctx, pool, redisClient, nil, channelUS, "en", now, 0, 15*time.Minute, 0.2)
 	if err != nil {
 		t.Fatalf("Build (US, after): %v", err)
 	}

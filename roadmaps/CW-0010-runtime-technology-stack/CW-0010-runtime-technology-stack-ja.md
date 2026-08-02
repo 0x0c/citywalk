@@ -242,7 +242,24 @@ ClickHouse が生のイベントと集計を保持します。負荷は追記が
       CW-0006 ユニット4）です。言語、宣言されたスキーマのメジャー番号、チャネルの所属ビットマップの
       ハッシュで鍵付けし、Redis の集合による索引でキャンペーン単位の無効化を行います。ここにあるものは
       すべて、この文書自身が認めているとおり、カウンタを除いて派生値か期限付きです。
-- [ ] ユニット5：Kafka 互換のログと、読み手ごとの位置。
+- [x] ユニット5：Kafka 互換のログと、読み手ごとの位置。
+      `internal/platform/eventlog` が、Kafka 互換ブローカーに対する実際の `franz-go` プロデューサと
+      コンシューマを包みます。配備先には Redpanda を想定していますが、franz-go はワイヤープロトコルを
+      話すだけで Redpanda 固有の機能には依存しないため、下記の試験は実際の Kafka ブローカーに対して
+      動きます。`Producer.Publish` はレコードをチャネルの識別子で鍵付けし（`PartitionKey`）、1つの
+      チャネルのイベントが常に同じ分割へ収まって順序を保つようにします。`Consumer.Poll` と
+      `Consumer.Commit` は位置を Kafka のコンシューマグループが持つ確定済みオフセットとして追跡し、
+      独自の表は作りません。`internal/event/model` の `EncodeLog` と `DecodeLogEvent` が、発行と消費の
+      橋渡し役（`internal/event/ingest.LogPublisher`、`internal/event/consumer.RunOnceFromLog`）が
+      共有するワイヤー形式です。`internal/platform/config` の CITYWALK_EVENT_PUBLISHER フラグが
+      この経路を選びます。既定はユニット11のとおり第1段階の PostgreSQL への直接書き込みのままなので、
+      これは実際に動く試験済みのコードであって、既定の経路ではありません。ブローカーを要さない部分
+      （分割鍵の導出、設定の選択と検証、メッセージの符号化と復号）は単体試験済みです。実際の
+      ブローカーに対して送信してから読み取り、位置を確定するまでの一往復と、チャネルごとの順序保証は、
+      `//go:build integration` と CITYWALK_TEST_KAFKA_BROKERS で切り替わる
+      `internal/platform/eventlog/eventlog_integration_test.go` と
+      `internal/event/eventlog_pipeline_integration_test.go` に置きました。この環境ではポート 9092 が
+      閉じておりブローカーへ到達できないため、その試験群は実行していません。
 - [x] ユニット6：ClickHouse の格納、集計、13か月の保持。
       `internal/platform/clickhouse` は、`clickhouse-go` の接続（`New`）と、本ユニットが求める生イベントの
       スキーマ（`events_raw`）を組み立てます。`events_raw` は `ReplacingMergeTree(server_time)`

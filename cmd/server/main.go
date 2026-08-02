@@ -19,6 +19,7 @@ import (
 
 	"github.com/0x0c/citywalk/internal/audience/registry"
 	"github.com/0x0c/citywalk/internal/event/consumer"
+	"github.com/0x0c/citywalk/internal/event/ingest"
 	"github.com/0x0c/citywalk/internal/event/mirror"
 	"github.com/0x0c/citywalk/internal/governance/budget"
 	"github.com/0x0c/citywalk/internal/membership/batch"
@@ -26,6 +27,7 @@ import (
 	"github.com/0x0c/citywalk/internal/platform/clickhouse"
 	"github.com/0x0c/citywalk/internal/platform/config"
 	"github.com/0x0c/citywalk/internal/platform/connectserver"
+	"github.com/0x0c/citywalk/internal/platform/eventlog"
 	"github.com/0x0c/citywalk/internal/platform/jobqueue"
 	"github.com/0x0c/citywalk/internal/platform/observability"
 	"github.com/0x0c/citywalk/internal/platform/postgres"
@@ -182,7 +184,25 @@ func run(logger *slog.Logger) error {
 		logger.Warn("CITYWALK_TOKEN_SIGNING_KEY not set, running without ChannelService, DeliveryService, or EventService")
 	}
 
-	mux, err := connectserver.NewMux(pool, redisClient, cfg.TokenSigningKey, adminAuthenticator)
+	// eventPublisher is CW-0010 Unit 11's staged-adoption seam: a nil value here leaves NewMux to
+	// default to the phase-one Postgres path (ingest.PostgresPublisher), which is what
+	// CITYWALK_EVENT_PUBLISHER defaults to as well. The log path is constructed only when explicitly
+	// selected, since connecting to a broker that is not actually there would otherwise fail a
+	// deployment that never asked for it.
+	var eventPublisher ingest.Publisher
+	if cfg.EventPublisherMode == config.EventPublisherLog {
+		logProducer, err := eventlog.NewProducer(eventlog.Config{Brokers: cfg.EventLogBrokers, Topic: cfg.EventLogTopic})
+		if err != nil {
+			return fmt.Errorf("connect to event log: %w", err)
+		}
+		defer logProducer.Close()
+		eventPublisher = ingest.LogPublisher{Producer: logProducer}
+		logger.Info("event publisher: kafka-compatible log", slog.Any("brokers", cfg.EventLogBrokers), slog.String("topic", cfg.EventLogTopic))
+	} else {
+		logger.Info("event publisher: postgres (phase one default)")
+	}
+
+	mux, err := connectserver.NewMux(pool, redisClient, cfg.TokenSigningKey, adminAuthenticator, eventPublisher)
 	if err != nil {
 		return fmt.Errorf("build connect mux: %w", err)
 	}

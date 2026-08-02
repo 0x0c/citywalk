@@ -13,6 +13,7 @@ func TestLoadDefaultsListenAddr(t *testing.T) {
 		"CITYWALK_LISTEN_ADDR", "CITYWALK_POSTGRES_DSN", "CITYWALK_REDIS_ADDR",
 		"CITYWALK_TOKEN_SIGNING_KEY", "CITYWALK_ADMIN_API_KEYS",
 		"CITYWALK_CLICKHOUSE_DSN", "CITYWALK_CLICKHOUSE_MIRROR_ENABLED",
+		"CITYWALK_EVENT_PUBLISHER", "CITYWALK_EVENT_LOG_BROKERS", "CITYWALK_EVENT_LOG_TOPIC",
 	} {
 		v, ok := os.LookupEnv(key)
 		if !ok {
@@ -54,6 +55,14 @@ func TestLoadDefaultsListenAddr(t *testing.T) {
 	// ClickHouse mirroring disabled.
 	if cfg.ClickHouseMirrorEnabled {
 		t.Error("ClickHouseMirrorEnabled = true, want false when CITYWALK_CLICKHOUSE_MIRROR_ENABLED is unset")
+	}
+	// CW-0010 Unit 11's staged adoption: the event publisher defaults to the phase-one Postgres path,
+	// never the log, when nothing overrides it.
+	if cfg.EventPublisherMode != config.EventPublisherPostgres {
+		t.Errorf("EventPublisherMode = %q, want %q", cfg.EventPublisherMode, config.EventPublisherPostgres)
+	}
+	if len(cfg.EventLogBrokers) != 0 {
+		t.Errorf("EventLogBrokers = %v, want empty", cfg.EventLogBrokers)
 	}
 }
 
@@ -123,5 +132,56 @@ func TestLoadRejectsAnUnrecognizedAdminRole(t *testing.T) {
 
 	if _, err := config.Load(); err == nil {
 		t.Fatal("Load: got nil error, want one for an unrecognized role")
+	}
+}
+
+// TestLoadSelectsTheLogEventPublisherWhenConfigured is CW-0010 Unit 11's staged-adoption switch, the
+// other way: explicitly configuring the log publisher mode with brokers set is accepted, and the
+// brokers are parsed and trimmed.
+func TestLoadSelectsTheLogEventPublisherWhenConfigured(t *testing.T) {
+	t.Setenv("CITYWALK_EVENT_PUBLISHER", "log")
+	t.Setenv("CITYWALK_EVENT_LOG_BROKERS", " broker-a:9092 ,broker-b:9092,")
+	t.Setenv("CITYWALK_EVENT_LOG_TOPIC", "citywalk.events.custom")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.EventPublisherMode != config.EventPublisherLog {
+		t.Errorf("EventPublisherMode = %q, want %q", cfg.EventPublisherMode, config.EventPublisherLog)
+	}
+	wantBrokers := []string{"broker-a:9092", "broker-b:9092"}
+	if len(cfg.EventLogBrokers) != len(wantBrokers) {
+		t.Fatalf("EventLogBrokers = %v, want %v", cfg.EventLogBrokers, wantBrokers)
+	}
+	for i, b := range wantBrokers {
+		if cfg.EventLogBrokers[i] != b {
+			t.Errorf("EventLogBrokers[%d] = %q, want %q", i, cfg.EventLogBrokers[i], b)
+		}
+	}
+	if cfg.EventLogTopic != "citywalk.events.custom" {
+		t.Errorf("EventLogTopic = %q, want %q", cfg.EventLogTopic, "citywalk.events.custom")
+	}
+}
+
+// TestLoadRejectsTheLogEventPublisherWithoutBrokers confirms selecting the log path without brokers
+// is a rejected misconfiguration, not a silent fallback to the Postgres path — a silent fallback here
+// would mean a deployment believes it cut over to the log while every event still lands in Postgres.
+func TestLoadRejectsTheLogEventPublisherWithoutBrokers(t *testing.T) {
+	t.Setenv("CITYWALK_EVENT_PUBLISHER", "log")
+	t.Setenv("CITYWALK_EVENT_LOG_BROKERS", "")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("Load: got nil error, want one for the log publisher mode with no brokers configured")
+	}
+}
+
+// TestLoadRejectsAnUnrecognizedEventPublisherMode confirms a typo in CITYWALK_EVENT_PUBLISHER fails
+// loudly rather than silently defaulting to either mode.
+func TestLoadRejectsAnUnrecognizedEventPublisherMode(t *testing.T) {
+	t.Setenv("CITYWALK_EVENT_PUBLISHER", "kafka")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("Load: got nil error, want one for an unrecognized event publisher mode")
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/0x0c/citywalk/gen/citywalk/delivery/v1/deliveryv1connect"
 	"github.com/0x0c/citywalk/gen/citywalk/event/v1/eventv1connect"
 	"github.com/0x0c/citywalk/gen/citywalk/platform/v1/platformv1connect"
+	"github.com/0x0c/citywalk/internal/event/ingest"
 	"github.com/0x0c/citywalk/internal/platform/adminauth"
 	"github.com/0x0c/citywalk/internal/platform/observability"
 )
@@ -36,6 +37,12 @@ const serviceName = "citywalk-server"
 // pattern: registered whenever pool is set, with Submit itself reporting Unavailable if redisClient
 // is nil, since only the rate limit (not the log append) needs Redis.
 //
+// eventPublisher is where DeliveryService's and EventService's accepted events are written —
+// CW-0010 Unit 11's staged-adoption seam. A nil eventPublisher defaults to
+// ingest.PostgresPublisher{Pool: pool}, phase one's direct write to events_log; the caller passes a
+// non-nil one (e.g. ingest.LogPublisher) only when internal/platform/config's event publisher mode
+// selects the Kafka-compatible log instead.
+//
 // DeliveryService and EventService are additionally wrapped with deviceAuthInterceptor
 // (tokenSigningSecret), CW-0010 Unit 9's device authentication: every request through either service
 // must carry a bearer token this process issued, and the handlers act only on the channel identity
@@ -49,6 +56,7 @@ func NewMux(
 	redisClient *redis.Client,
 	tokenSigningSecret []byte,
 	adminAuthenticator adminauth.Authenticator,
+	eventPublisher ingest.Publisher,
 ) (http.Handler, error) {
 	otelInterceptor, err := otelconnect.NewInterceptor()
 	if err != nil {
@@ -56,6 +64,10 @@ func NewMux(
 	}
 	logger := observability.NewLogger(serviceName)
 	interceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger))
+
+	if eventPublisher == nil && pool != nil {
+		eventPublisher = ingest.PostgresPublisher{Pool: pool}
+	}
 
 	mux := http.NewServeMux()
 	healthPath, healthHandler := platformv1connect.NewHealthServiceHandler(HealthServer{}, interceptors)
@@ -65,12 +77,12 @@ func NewMux(
 		deviceInterceptors := connect.WithInterceptors(otelInterceptor, loggingInterceptor(logger), deviceAuthInterceptor(tokenSigningSecret))
 
 		deliveryPath, deliveryHandler := deliveryv1connect.NewDeliveryServiceHandler(
-			DeliveryServer{Pool: pool, Redis: redisClient}, deviceInterceptors,
+			DeliveryServer{Pool: pool, Redis: redisClient, Publisher: eventPublisher}, deviceInterceptors,
 		)
 		mux.Handle(deliveryPath, deliveryHandler)
 
 		eventPath, eventHandler := eventv1connect.NewEventServiceHandler(
-			EventServer{Pool: pool, Redis: redisClient}, deviceInterceptors,
+			EventServer{Publisher: eventPublisher, Redis: redisClient}, deviceInterceptors,
 		)
 		mux.Handle(eventPath, eventHandler)
 

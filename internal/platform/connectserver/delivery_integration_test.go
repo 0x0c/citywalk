@@ -101,7 +101,7 @@ func TestConfirmRPCApprovesAnActiveMessage(t *testing.T) {
 	}
 	_, token := registerTestChannel(t, ctx, pool, map[string]any{})
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestConfirmRPCDeniesAnUnknownMessage(t *testing.T) {
 	}
 	_, token := registerTestChannel(t, ctx, pool, map[string]any{})
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestConfirmRPCRejectsAMissingToken(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestSyncRPCWithoutRedisFailsCleanly(t *testing.T) {
 	}
 	_, token := registerTestChannel(t, ctx, pool, map[string]any{})
 
-	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, nil, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSyncRPCReturnsAPayloadThenUnchanged(t *testing.T) {
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestUpdateMessageStateRPCInvalidatesTheChannelsCachedBundle(t *testing.T) {
 		t.Fatalf("batch.Recompute: %v", err)
 	}
 
-	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -494,7 +494,7 @@ func TestConfirmRPCEnforcesTheProjectBudgetAndReportsExhaustion(t *testing.T) {
 	channelID, token := registerTestChannel(t, ctx, pool, map[string]any{})
 	messageID := insertStrictMessage(t, ctx, pool, now, false)
 
-	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -549,7 +549,7 @@ func TestConfirmRPCBypassesTheBudgetForExemptCampaigns(t *testing.T) {
 	channelID, token := registerTestChannel(t, ctx, pool, map[string]any{})
 	messageID := insertStrictMessage(t, ctx, pool, now, true)
 
-	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator)
+	mux, err := connectserver.NewMux(pool, redisClient, testTokenSecret, testAdminAuthenticator, nil)
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}

@@ -92,7 +92,7 @@ func TestMirrorWorkerWorkInsertsAcceptedEventsIntoClickHouse(t *testing.T) {
 	events := []model.Event{
 		{ID: eventID, ChannelID: channelID, Kind: model.KindCustom, Name: "screen_view", DeviceTime: now},
 	}
-	if _, err := ingest.Accept(ctx, pool, limiter, channelID, events, now); err != nil {
+	if _, err := ingest.Accept(ctx, ingest.PostgresPublisher{Pool: pool}, limiter, channelID, events, now); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 
@@ -129,7 +129,7 @@ func TestMirrorWorkerWorkIsIdempotentOnRerunWithNoNewEvents(t *testing.T) {
 	events := []model.Event{
 		{ID: eventID, ChannelID: channelID, Kind: model.KindCustom, Name: "screen_view", DeviceTime: now},
 	}
-	if _, err := ingest.Accept(ctx, pool, limiter, channelID, events, now); err != nil {
+	if _, err := ingest.Accept(ctx, ingest.PostgresPublisher{Pool: pool}, limiter, channelID, events, now); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 

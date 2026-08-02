@@ -25,7 +25,7 @@ import (
 	"github.com/0x0c/citywalk/migrations"
 )
 
-func testDeps(t *testing.T) (*pgxpool.Pool, *redis.Client) {
+func testDeps(t *testing.T) (*pgxpool.Pool, *redis.Client, ingest.Publisher) {
 	t.Helper()
 	pgDSN := os.Getenv("CITYWALK_TEST_POSTGRES_DSN")
 	redisAddr := os.Getenv("CITYWALK_TEST_REDIS_ADDR")
@@ -62,7 +62,7 @@ func testDeps(t *testing.T) (*pgxpool.Pool, *redis.Client) {
 		t.Fatalf("flush redis: %v", err)
 	}
 
-	return pool, redisClient
+	return pool, redisClient, ingest.PostgresPublisher{Pool: pool}
 }
 
 func insertChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
@@ -99,7 +99,7 @@ func insertMessage(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (messa
 // events is accepted, a resend of the same batch is a no-op (Unit 4), and the rollup consumer turns
 // the accepted events into the targeting and campaign rollups (Unit 5) a real caller would read.
 func TestAcceptDedupsAndAggregates(t *testing.T) {
-	pool, redisClient := testDeps(t)
+	pool, redisClient, publisher := testDeps(t)
 	ctx := context.Background()
 	channelID := insertChannel(t, ctx, pool)
 	messageID, variantID := insertMessage(t, ctx, pool)
@@ -117,7 +117,7 @@ func TestAcceptDedupsAndAggregates(t *testing.T) {
 		},
 	}
 
-	result, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now)
+	result, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now)
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestAcceptDedupsAndAggregates(t *testing.T) {
 
 	// A resend of the identical batch must be a no-op: the events already exist, so Unit 4's
 	// merge-time dedup collapses every row and nothing new is accepted.
-	resend, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now)
+	resend, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now)
 	if err != nil {
 		t.Fatalf("Accept (resend): %v", err)
 	}
@@ -189,7 +189,7 @@ func TestAcceptDedupsAndAggregates(t *testing.T) {
 // the event (server_time, via now), not the day the device claims. Accept must also flag the event
 // (Result.ClockSkewFlagged) rather than trust it verbatim, without rejecting it outright.
 func TestRunOnceClampsFutureDeviceTimeToServerTime(t *testing.T) {
-	pool, redisClient := testDeps(t)
+	pool, redisClient, publisher := testDeps(t)
 	ctx := context.Background()
 	channelID := insertChannel(t, ctx, pool)
 	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
@@ -203,7 +203,7 @@ func TestRunOnceClampsFutureDeviceTimeToServerTime(t *testing.T) {
 		},
 	}
 
-	result, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now)
+	result, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now)
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestRunOnceClampsFutureDeviceTimeToServerTime(t *testing.T) {
 // debugging — but it is both flagged (Result.ClockSkewFlagged) and not trusted for bucketing, which
 // TestRunOnceClampsImplausiblyOldDeviceTimeToServerTime below proves separately.
 func TestAcceptFlagsButDoesNotRejectAnImplausiblyOldDeviceTime(t *testing.T) {
-	pool, redisClient := testDeps(t)
+	pool, redisClient, publisher := testDeps(t)
 	ctx := context.Background()
 	channelID := insertChannel(t, ctx, pool)
 	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
@@ -254,7 +254,7 @@ func TestAcceptFlagsButDoesNotRejectAnImplausiblyOldDeviceTime(t *testing.T) {
 		},
 	}
 
-	result, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now)
+	result, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now)
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestAcceptFlagsButDoesNotRejectAnImplausiblyOldDeviceTime(t *testing.T) {
 // backlog) buckets by the server's receipt time, not the claimed device day — the same protection
 // TestRunOnceClampsFutureDeviceTimeToServerTime proves for the future direction.
 func TestRunOnceClampsImplausiblyOldDeviceTimeToServerTime(t *testing.T) {
-	pool, redisClient := testDeps(t)
+	pool, redisClient, publisher := testDeps(t)
 	ctx := context.Background()
 	channelID := insertChannel(t, ctx, pool)
 	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
@@ -295,7 +295,7 @@ func TestRunOnceClampsImplausiblyOldDeviceTimeToServerTime(t *testing.T) {
 		},
 	}
 
-	if _, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now); err != nil {
+	if _, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
@@ -321,7 +321,7 @@ func TestRunOnceClampsImplausiblyOldDeviceTimeToServerTime(t *testing.T) {
 // TestAcceptRejectsInvalidEventsButKeepsValidOnes confirms Unit 2's per-event rejection: one bad
 // event in a batch does not sink the rest.
 func TestAcceptRejectsInvalidEventsButKeepsValidOnes(t *testing.T) {
-	pool, redisClient := testDeps(t)
+	pool, redisClient, publisher := testDeps(t)
 	ctx := context.Background()
 	channelID := insertChannel(t, ctx, pool)
 	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1000, Window: time.Minute}
@@ -333,7 +333,7 @@ func TestAcceptRejectsInvalidEventsButKeepsValidOnes(t *testing.T) {
 		{ID: "01912d2c-0000-7000-8000-000000000011", ChannelID: channelID, Kind: model.KindCustom, Name: "launch", DeviceTime: now},
 	}
 
-	result, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now)
+	result, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now)
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestAcceptRejectsInvalidEventsButKeepsValidOnes(t *testing.T) {
 // TestAcceptEnforcesThePerChannelRateLimit confirms Unit 2's rate limit rejects a batch that would
 // push a channel over its ceiling within the window, without touching the log.
 func TestAcceptEnforcesThePerChannelRateLimit(t *testing.T) {
-	pool, redisClient := testDeps(t)
+	pool, redisClient, publisher := testDeps(t)
 	ctx := context.Background()
 	channelID := insertChannel(t, ctx, pool)
 	limiter := ratelimit.Limiter{Redis: redisClient, Limit: 1, Window: time.Minute}
@@ -356,7 +356,7 @@ func TestAcceptEnforcesThePerChannelRateLimit(t *testing.T) {
 		{ID: "01912d2c-0000-7000-8000-000000000021", ChannelID: channelID, Kind: model.KindCustom, Name: "b", DeviceTime: now},
 	}
 
-	result, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now)
+	result, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now)
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestAcceptEnforcesThePerChannelRateLimit(t *testing.T) {
 // attribution goes to B (the most recent exposure), and a separate channel that qualified for the
 // holdout and later converts counts toward the holdout's own rate.
 func TestAttributionPicksTheMostRecentPrecedingImpressionAndCountsTheHoldout(t *testing.T) {
-	pool, _ := testDeps(t)
+	pool, _, _ := testDeps(t)
 	ctx := context.Background()
 	messageID, variantA := insertMessage(t, ctx, pool)
 	_, variantB := insertMessage(t, ctx, pool) // second message row unused; only its variant matters here
@@ -419,7 +419,7 @@ func TestAttributionPicksTheMostRecentPrecedingImpressionAndCountsTheHoldout(t *
 // TestSuppressionReportBreaksDownByReason is CW-0009 Unit 7 end to end: suppression events aggregate
 // by reason, alongside the impression count already in campaign_rollup.
 func TestSuppressionReportBreaksDownByReason(t *testing.T) {
-	pool, redisClient := testDeps(t)
+	pool, redisClient, publisher := testDeps(t)
 	ctx := context.Background()
 	channelID := insertChannel(t, ctx, pool)
 	messageID, variantID := insertMessage(t, ctx, pool)
@@ -432,7 +432,7 @@ func TestSuppressionReportBreaksDownByReason(t *testing.T) {
 		{ID: "01912d2c-0000-7000-8000-000000000032", ChannelID: channelID, Kind: model.KindSuppression, MessageID: messageID, SuppressionReason: model.ReasonCooldown, DeviceTime: now},
 		{ID: "01912d2c-0000-7000-8000-000000000033", ChannelID: channelID, Kind: model.KindSuppression, MessageID: messageID, SuppressionReason: model.ReasonProjectBudget, DeviceTime: now},
 	}
-	if _, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now); err != nil {
+	if _, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
@@ -459,7 +459,7 @@ func TestSuppressionReportBreaksDownByReason(t *testing.T) {
 // must land in server-time's day, exactly like the targeting and campaign rollups already do — the
 // suppression rollup must not be the one rollup writer that trusts device_time verbatim.
 func TestSuppressionRollupBucketsByReceiptTimeNotRawDeviceTime(t *testing.T) {
-	pool, redisClient := testDeps(t)
+	pool, redisClient, publisher := testDeps(t)
 	ctx := context.Background()
 	channelID := insertChannel(t, ctx, pool)
 	messageID, _ := insertMessage(t, ctx, pool)
@@ -473,7 +473,7 @@ func TestSuppressionRollupBucketsByReceiptTimeNotRawDeviceTime(t *testing.T) {
 			MessageID: messageID, SuppressionReason: model.ReasonCooldown, DeviceTime: futureDeviceTime,
 		},
 	}
-	if _, err := ingest.Accept(ctx, pool, limiter, channelID, batch, now); err != nil {
+	if _, err := ingest.Accept(ctx, publisher, limiter, channelID, batch, now); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if _, err := consumer.RunOnce(ctx, pool, consumer.TargetingRollupConsumer, 100, nil); err != nil {
