@@ -1,0 +1,27 @@
+# Disposable PostgreSQL and Redis for cmd/demo and for a manual run of cmd/server (see
+# docs/demo.md). Not for production use: fixed credentials, no persistence beyond the container's
+# own lifetime, no replication.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: citywalk
+      POSTGRES_PASSWORD: citywalk
+      POSTGRES_DB: citywalk
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U citywalk -d citywalk"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

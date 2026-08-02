@@ -45,6 +45,9 @@ roadmaps/
    owns changes. CW-0001 also names the item that designs each piece.
 3. [`roadmaps/README.md`](roadmaps/README.md) indexes every item, defines the format the items
    follow, and gives the procedure for adding one.
+4. [`docs/demo.md`](docs/demo.md) runs the phase-one server some of these items already describe.
+   It calls every network endpoint that server exposes today, against a disposable PostgreSQL and
+   Redis.
 
 ## Bilingual documentation
 
