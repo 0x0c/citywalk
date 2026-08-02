@@ -35,16 +35,13 @@ type logPoller interface {
 // batch is refetched and reprocessed on restart, rather than the offset advancing past events whose
 // rollup writes never happened.
 //
-// That same ordering is also this consumer's open gap against Unit 3's "every consumer is required to
-// be idempotent." RunOnce satisfies that requirement by committing its offset advance and its rollup
-// writes in the same Postgres transaction, so a retry is never observable. Here the log's offset and
-// the rollup writes are two different systems that can fail independently between the two commits
-// above; applyBatch's rollup writes are `count = count + 1`, not keyed by event id, so a reprocessed
-// batch increments those counts a second time rather than being recognized as a duplicate. Closing
-// that gap needs its own idempotency key on the rollup writes themselves — out of scope here, since
-// this pass shares applyBatch unchanged rather than modifying the one part of a consumer CW-0009
-// Unit 3 requires the two variants to share, and no live broker is reachable in this repository's
-// sandbox to exercise the gap either way.
+// That reprocessing is safe against double-counting because applyBatch itself is idempotent per event
+// (rollup_applied_events, see the package doc comment): the log's committed offset and the rollup
+// writes still live in two systems that can fail independently between the two commits above, but a
+// batch reprocessed because of that gap now finds every already-applied event's id already recorded
+// and skips its rollup writes, rather than applyBatch's `count = count + 1` writes double-counting it.
+// The log's offset lagging behind is therefore observable only as repeated, no-op work on the next
+// run, never as a double count.
 func RunOnceFromLog(ctx context.Context, pool *pgxpool.Pool, logConsumer logPoller, budgetCounter *budget.Counter) (int, error) {
 	records, err := logConsumer.Poll(ctx)
 	if err != nil {

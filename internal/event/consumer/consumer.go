@@ -4,15 +4,23 @@
 //
 //   - RunOnce reads events_log since its last recorded position (event_consumer_offsets), applies
 //     each event to the targeting rollup, the campaign rollup, the reach sketch, and the suppression
-//     rollup (Units 5 and 7), and advances its offset — all inside one Postgres transaction. That is
-//     phase one's answer to Unit 3's "every consumer is required to be idempotent": committing the
-//     rollup deltas and the offset advance together, in the same instance, makes a crash between them
-//     impossible to observe, so a retry after any failure reprocesses the same events rather than
-//     skipping or double-counting them.
+//     rollup (Units 5 and 7), and advances its offset — all inside one Postgres transaction.
 //   - RunOnceFromLog reads from the Kafka-compatible log instead (internal/platform/eventlog, CW-0010
-//     Unit 5), tracking its position as a Kafka consumer group's committed offsets. Its own doc
-//     comment explains why that path does not yet close the same idempotency gap RunOnce closes for
-//     free — the offset commit and the rollup transaction are two systems, not one.
+//     Unit 5), tracking its position as a Kafka consumer group's committed offsets — a second system
+//     from the Postgres transaction that holds the rollup writes, unlike RunOnce's single transaction.
+//
+// Unit 3 requires every consumer to be idempotent under at-least-once delivery. Committing the offset
+// advance and the rollup writes together, as RunOnce does, makes a crash between them unobservable for
+// that consumer specifically, but the same argument does not extend to RunOnceFromLog, whose position
+// lives in a system the Postgres transaction cannot include. applyBatch closes the gap at its actual
+// source instead of leaving it to each consumer's position-tracking scheme: every rollup write it
+// makes for an event is guarded by rollup_applied_events (migrations/0014_rollup_applied_events.sql),
+// a table keyed by event id that records an event's rollup writes as made, in the same transaction as
+// those writes. A replayed event — from either consumer, for any reason a batch gets reprocessed —
+// finds its id already recorded and applyBatch skips its rollup writes entirely, rather than letting
+// the unconditional `count = count + 1` these rollups use double-count it. Idempotency is therefore a
+// property of the rollup writes themselves, shared by construction, not a guarantee each consumer has
+// to separately re-derive from how it happens to track its own position.
 package consumer
 
 import (
@@ -141,8 +149,24 @@ func RunOnce(ctx context.Context, pool *pgxpool.Pool, consumerName string, batch
 // sketch, and the suppression rollup (Units 5 and 7) inside tx — the rollup-writing logic RunOnce and
 // RunOnceFromLog share verbatim, per CW-0009 Unit 3: only where events themselves come from is allowed
 // to differ between a Postgres-backed and a Kafka-log-backed consumer.
+//
+// Before writing any rollup for e, it records e as applied (markApplied) and skips e entirely if that
+// record already existed — Unit 3's idempotency requirement, implemented once here rather than by each
+// consumer separately. One record per event is enough regardless of how many rollups e touches: which
+// rollups an event drives (targeting always; campaign and the reach sketch only for an impression-family
+// kind carrying a message id; suppression only for a suppression carrying one) is fully determined by
+// that event's own kind and message id, both fixed at creation, so a replayed event resolves to the
+// exact same set of writes as the first time and a single guard in front of all of them is sufficient.
 func applyBatch(ctx context.Context, tx pgx.Tx, events []storedEvent) error {
 	for _, e := range events {
+		alreadyApplied, err := markApplied(ctx, tx, e.ID)
+		if err != nil {
+			return err
+		}
+		if alreadyApplied {
+			continue
+		}
+
 		if err := applyTargetingRollup(ctx, tx, e); err != nil {
 			return err
 		}
@@ -166,6 +190,22 @@ func applyBatch(ctx context.Context, tx pgx.Tx, events []storedEvent) error {
 		}
 	}
 	return nil
+}
+
+// markApplied inserts e's event id into rollup_applied_events, the per-event idempotency key every
+// rollup write in applyBatch is guarded by (migrations/0014_rollup_applied_events.sql), and reports
+// whether it was already present — a replay of an event this same transaction-scoped guarantee already
+// covered once. It runs inside tx, the same transaction as the rollup writes it guards, so the record
+// and the writes it protects always commit or roll back together.
+func markApplied(ctx context.Context, tx pgx.Tx, eventID string) (alreadyApplied bool, err error) {
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO rollup_applied_events (event_id) VALUES ($1) ON CONFLICT (event_id) DO NOTHING`,
+		eventID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("consumer: mark event %s applied: %w", eventID, err)
+	}
+	return tag.RowsAffected() == 0, nil
 }
 
 // reconcileBudget folds every impression in events into budgetCounter, CW-0007 Unit 5's project-wide

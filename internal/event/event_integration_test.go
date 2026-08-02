@@ -51,7 +51,7 @@ func testDeps(t *testing.T) (*pgxpool.Pool, *redis.Client, ingest.Publisher) {
 
 	for _, table := range []string{
 		"conversion_attributions", "suppression_rollup", "reach_sketch", "campaign_rollup",
-		"targeting_rollup", "event_consumer_offsets", "events_log",
+		"targeting_rollup", "rollup_applied_events", "event_consumer_offsets", "events_log",
 		"variants", "control_policies", "triggers", "display_conditions", "message_audit_log", "delivery_change_log", "messages", "channels",
 	} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+table); err != nil {

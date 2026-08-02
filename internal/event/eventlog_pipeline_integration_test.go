@@ -41,7 +41,7 @@ func logTestDeps(t *testing.T) (*pgxpool.Pool, eventlog.Config) {
 	if err := postgres.Migrate(ctx, pool, migrations.FS); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	for _, table := range []string{"targeting_rollup", "campaign_rollup", "events_log", "messages", "channels"} {
+	for _, table := range []string{"targeting_rollup", "campaign_rollup", "rollup_applied_events", "events_log", "messages", "channels"} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("clear %s: %v", table, err)
 		}

@@ -199,35 +199,49 @@ closed set of reasons.
       rest of its batch), enforces a per-channel fixed-window rate limit in Redis
       (`internal/event/ratelimit`), and records rejected volume by channel and reason as an
       OpenTelemetry counter.
-- [ ] Unit 3 — The durable log, partitioned by channel, with per-consumer positions.
-      This pass leaves phase one, `internal/event/consumer.RunOnce` against the Postgres table
-      `migrations/0006_events.sql`, unchanged; it stays the active path. It keeps per-consumer offsets,
-      replay from a stored position, and at-least-once-safe consumption, with the offset advance and
-      every rollup write for a batch committing in one transaction. A retry after an interruption thus
-      reprocesses events instead of double-counting them. This pass adds a second, real path behind
-      CW-0010 Unit 5's log: `internal/platform/eventlog`, `internal/event/ingest.LogPublisher`, and
+- [x] Unit 3 — The durable log, partitioned by channel, with per-consumer positions.
+      Phase one, `internal/event/consumer.RunOnce` against the Postgres table
+      `migrations/0006_events.sql`, stays the active path, keeping per-consumer offsets, replay from a
+      stored position, and at-least-once-safe consumption. A second, real path exists behind CW-0010
+      Unit 5's log: `internal/platform/eventlog`, `internal/event/ingest.LogPublisher`, and
       `internal/event/consumer.RunOnceFromLog`. `internal/platform/config`'s CITYWALK_EVENT_PUBLISHER
-      flag selects it, and the flag defaults to Postgres, so this pass does not cut over. Partitioning
-      by channel identifier is real: `eventlog.PartitionKey` keys every record by channel identifier,
-      tested for determinism and, against a real broker, for the per-channel ordering partitioning
-      exists to guarantee. Per-consumer position tracking is real too, realized as a Kafka consumer
-      group's committed offsets rather than a reinvented table. `RunOnceFromLog` shares `RunOnce`'s
-      rollup-writing logic, `applyBatch` and `reconcileBudget`, unchanged, matching the design's own
-      rule that a Postgres-backed and a log-backed consumer should differ in where the next event
-      comes from and nowhere else. One design rule stays unmet: every consumer must be idempotent
-      under at-least-once delivery. `RunOnce` meets it by committing its offset advance and its rollup
-      writes in one Postgres transaction, so a retry is never observable. `RunOnceFromLog` cannot do
-      the same, because its position (the log's committed offset) and its rollup writes sit in two
-      systems that can fail independently between the two commits. Stopping between them reprocesses
-      the batch on the next run and double-counts, since `applyBatch`'s writes are `count = count + 1`
-      rather than deduplicated by event identifier. Closing that gap needs an idempotency key on the
-      rollup writes themselves. This pass leaves that key out, because adding it would break the
-      shared rollup-writing logic the design requires between the two consumers, and that gap is why
-      this box stays unchecked. This sandbox has no reachable Kafka-compatible broker, since nothing
-      listens on port 9092 here, so nothing in this pass ran against a real log. This pass tests the
-      parts that need no broker — partition-key derivation, message encoding and decoding, and
-      `RunOnceFromLog`'s control flow against a fake log client — and leaves the produce-consume-commit
-      round trip and the per-channel ordering guarantee untested.
+      flag selects it and defaults to Postgres, so this stays an alternate path, not a cutover.
+      Partitioning by channel identifier is real (`eventlog.PartitionKey`, tested for determinism and,
+      against a real broker, for the per-channel ordering partitioning exists to guarantee), and
+      per-consumer position tracking is real too: `event_consumer_offsets` for the Postgres path, a
+      Kafka consumer group's committed offsets for the log path.
+
+      This pass closes the one design rule that stayed unmet: every consumer must be idempotent under
+      at-least-once delivery. `RunOnce`'s offset advance and its rollup writes already shared one
+      Postgres transaction, but `RunOnceFromLog`'s position (the log's committed offset) and its rollup
+      writes sit in two systems that can fail independently between their two commits, so a crash
+      between them reprocessed a batch and double-counted it, since `applyBatch`'s writes are
+      `count = count + 1` rather than deduplicated by event identifier. The fix sits at the rollup
+      writes themselves, not at either consumer's position tracking: `applyBatch`
+      (`internal/event/consumer`) now records every event it processes in `rollup_applied_events`
+      (`migrations/0014_rollup_applied_events.sql`) — an `INSERT ... ON CONFLICT (event_id) DO NOTHING`
+      guard keyed by event id, in the same transaction as the rollup writes that event drives — and
+      skips an event whose id is already recorded rather than re-incrementing `targeting_rollup`,
+      `campaign_rollup`, `reach_sketch`, or `suppression_rollup`. One record per event is enough
+      regardless of which of those tables it touches, because an event's kind and message id, both
+      fixed at creation, fully determine that fixed set of writes, so a replay resolves to exactly the
+      writes the first pass already made. `RunOnce` and `RunOnceFromLog` both get this through the
+      shared `applyBatch`, unchanged in either consumer's own position-tracking logic, matching the
+      design's rule that the two differ only in where the next event comes from. The table is
+      deliberately not pruned, unlike a bounded change log — pruning would reopen the exact
+      double-count this table exists to prevent for any event older than a retention window — and the
+      migration's own comment records why that is safe here: its per-row footprint tracks `events_log`,
+      a table this codebase already keeps unpruned in phase one, so it adds no new order of growth.
+
+      Proven directly against real Postgres:
+      `internal/event/consumer.TestApplyBatchIsIdempotentAcrossSeparateTransactions`
+      (`//go:build integration`) applies the same batch through `applyBatch` twice, in two separate
+      transactions — the shape of the actual failure, since `RunOnce`'s own transaction never lets it
+      observe a retry — and asserts every rollup lands each event's count exactly once, not twice. This
+      sandbox still has no reachable Kafka-compatible broker (nothing listens on port 9092 here), so
+      `RunOnceFromLog`'s produce-consume-commit round trip against a real broker remains untested, as
+      before; what changed is that the mechanism making any replay safe, from either consumer, is now
+      proven against real Postgres rather than left as a documented gap.
 - [x] Unit 4 — Columnar storage with merge-time deduplication by event identifier.
       Phase one keeps its write-time approximation. Deduplication by event identifier still happens
       through events_log's primary key and `ON CONFLICT DO NOTHING` at insert
